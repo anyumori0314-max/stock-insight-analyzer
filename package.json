@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "FANG+や個別米国株の分析ダッシュボード",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:frontend": "npm --prefix frontend run dev",
@@ -12,6 +15,9 @@
     "build:backend": "npm --prefix backend run build",
     "start:backend": "npm --prefix backend run start",
     "typecheck": "npm --prefix frontend run typecheck && npm --prefix backend run typecheck",
+    "test": "npm run test:backend",
+    "test:backend": "npm --prefix backend run test:run",
+    "test:run": "npm --prefix backend run test:run",
     "install:all": "npm install && npm --prefix frontend install && npm --prefix backend install"
   },
   "devDependencies": {

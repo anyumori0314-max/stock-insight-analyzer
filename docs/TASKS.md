@@ -26,14 +26,32 @@
 
 ## Phase 1: バックエンドAPI基盤
 
-- [ ] 環境変数の一元管理（src/config.ts）とバリデーション
-- [ ] CORS 設定
-- [ ] セキュリティヘッダー（helmet）の導入
-- [ ] エラーハンドリングミドルウェアの実装
-- [ ] /api/stock/:ticker ルートのスケルトン作成
-- [ ] 入力バリデーション（zod によるティッカーバリデーション）
-- [ ] テスト環境の構築（Vitest）
-- [ ] /api/health および新規エンドポイントのテスト
+- [x] 環境変数の一元管理（src/config/env.ts）とバリデーション
+- [x] CORS 設定
+- [x] セキュリティヘッダー（helmet）の導入
+- [x] エラーハンドリングミドルウェアの実装
+- [x] /api/stock/:ticker ルートのスケルトン作成
+- [x] 入力バリデーション（zod によるティッカーバリデーション）
+- [x] テスト環境の構築（Vitest）
+- [x] /api/health および新規エンドポイントのテスト
+
+### Phase 1.5: Codex レビュー指摘対応
+
+- [x] 全体レートリミッターを JSON body parser より前に配置（不正 JSON / サイズ超過も制限対象）
+- [x] body parser エラーの統一（不正 JSON→400 `INVALID_JSON` / 超過→413 `PAYLOAD_TOO_LARGE`）
+- [x] ティッカー検証順序の修正（ASCII 限定チェックを大文字変換の前に適用）
+- [x] `TRUST_PROXY`（数値 hop、zod 検証、既定 0）の導入と `trust proxy` 設定
+- [x] 汎用 500 を `INTERNAL_SERVER_ERROR` へ統一し、本物の非 ApiError 例外でテスト
+- [x] `/api/health` のレート制限方針の明確化（リミッター対象外）とテスト
+- [x] Node.js 要件を依存関係に整合（`>=20.19.0`、engines 追記）
+- [x] CORS プリフライト / 環境変数境界 / RateLimit ヘッダー / ティッカー境界のテスト追加
+- [x] README・.env.example・TASKS の実装整合
+
+### Phase 1.6: Codex 再レビュー指摘対応
+
+- [x] body parser エラー判定の強化（`type` 単独でなく `expose`/`status`/`body`/`limit` を併用、偽装 Error は 500）
+- [x] テスト fixture からローカル絶対パス（実ユーザー名）を除去し OS 非依存のダミーパスへ置換
+- [x] RateLimit draft-7 の説明・テストを実ヘッダー（`RateLimit` / `RateLimit-Policy` / `Retry-After`）へ整合
 
 ## Phase 2: Alpha Vantage 連携
 

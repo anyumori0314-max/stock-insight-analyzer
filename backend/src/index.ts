@@ -1,18 +1,17 @@
 import path from "path";
-import express from "express";
 import dotenv from "dotenv";
 
+import { createApp } from "./app";
+import { loadEnv } from "./config/env";
+
+// Load the single root .env regardless of the current working directory or
+// whether we run from src (tsx) or dist (node).
 dotenv.config({ path: path.resolve(__dirname, "..", "..", ".env") });
 
-const app = express();
-const PORT = process.env.PORT || 3001;
+const env = loadEnv();
+const app = createApp({ env });
 
-app.use(express.json());
-
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok" });
-});
-
-app.listen(PORT, () => {
-  console.log(`Backend server running on http://localhost:${PORT}`);
+app.listen(env.PORT, () => {
+  // Never log secrets — only the bind URL.
+  console.log(`Backend server running on http://localhost:${env.PORT}`);
 });
