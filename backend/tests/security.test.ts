@@ -1,0 +1,38 @@
+import request from "supertest";
+import { describe, expect, it } from "vitest";
+import { buildTestApp } from "./helpers";
+
+describe("Security headers (helmet)", () => {
+  it("sets key security headers and hides x-powered-by", async () => {
+    const app = buildTestApp();
+    const res = await request(app).get("/api/health");
+
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["x-frame-options"]).toBeDefined();
+    expect(res.headers["x-powered-by"]).toBeUndefined();
+  });
+});
+
+describe("Error responses", () => {
+  it("never includes a stack trace or internal fields", async () => {
+    const app = buildTestApp();
+    const res = await request(app).get("/api/stock/INVALID!!!");
+
+    const raw = JSON.stringify(res.body);
+    expect(raw).not.toMatch(/\bat\s+.+:\d+:\d+/); // no stack frames
+    expect(res.body).not.toHaveProperty("stack");
+    expect(res.body.error).not.toHaveProperty("stack");
+  });
+
+  it("keeps the 501 contract clean (no details leaked outside development)", async () => {
+    // A valid ticker returns 501 (not 500). This asserts the 501 body is the
+    // unified shape with no `details` outside development. The genuine 500 path
+    // for unexpected (non-ApiError) errors is covered in errorHandler.test.ts.
+    const app = buildTestApp();
+    const res = await request(app).get("/api/stock/AAPL");
+
+    expect(res.status).toBe(501);
+    expect(res.body.error.code).toBe("NOT_IMPLEMENTED");
+    expect(res.body.error).not.toHaveProperty("details"); // stripped outside dev
+  });
+});
