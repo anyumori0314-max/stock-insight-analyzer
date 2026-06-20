@@ -1,0 +1,20 @@
+{
+  "name": "stock-insight-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FANG+や個別米国株の分析ダッシュボード",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:backend": "npm --prefix backend run build",
+    "start:backend": "npm --prefix backend run start",
+    "typecheck": "npm --prefix frontend run typecheck && npm --prefix backend run typecheck",
+    "install:all": "npm install && npm --prefix frontend install && npm --prefix backend install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
