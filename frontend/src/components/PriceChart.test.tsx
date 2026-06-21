@@ -26,7 +26,7 @@ describe("PriceChart", () => {
     const summary = screen.getByText(/価格チャート要約/);
     expect(summary.textContent).toContain("100d");
     expect(summary.textContent).toContain("終値（調整前）");
-    expect(summary.textContent).toContain("$104.00");
+    expect(summary.textContent).toContain("104.00");
     expect(summary.textContent).toContain("上昇基調");
   });
 

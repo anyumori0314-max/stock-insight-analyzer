@@ -10,7 +10,8 @@ const optionalSecret = z.preprocess(
   z.string().min(1).optional()
 );
 
-const envSchema = z.object({
+const envSchema = z
+  .object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().max(65535).default(3001),
   // Number of reverse-proxy hops to trust for client IP resolution.
@@ -30,17 +31,31 @@ const envSchema = z.object({
     .min(1000)
     .max(30000)
     .default(8000),
+  // Hard cap on accepted daily points from the provider. `outputsize=compact`
+  // returns ~100; 120 leaves headroom while rejecting an unexpectedly huge
+  // response (PROVIDER_RESPONSE_INVALID) instead of silently truncating it.
+  // Must be a positive integer; capped to a sane ceiling.
+  ALPHA_VANTAGE_MAX_POINTS: z.coerce.number().int().positive().max(10000).default(120),
   // Maximum number of (ticker:range) reports kept in the in-memory cache.
   // Bounds memory and enables LRU eviction. Must be a positive integer.
   STOCK_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().max(100000).default(100),
-  // Cache lifetime (ms) for a stock report. Daily bars only change after the
-  // close, so a few minutes shields the provider's scarce free-tier quota.
-  STOCK_CACHE_TTL_MS: z.coerce
+  // Cache lifetime (SECONDS) for a stock report. Daily bars only change after
+  // the close, so a multi-hour TTL shields the provider's scarce free-tier
+  // quota while staying same-day fresh. Default 21600 = 6h; capped at 86400
+  // (24h). Zero / negative / non-integer values are rejected at startup.
+  STOCK_CACHE_TTL_SECONDS: z.coerce
     .number()
     .int()
-    .min(1000)
-    .max(86_400_000)
-    .default(5 * 60 * 1000),
+    .positive()
+    .max(86_400)
+    .default(21_600),
+  // Data source for stock reports:
+  //   live = call Alpha Vantage (consumes the free-tier quota).
+  //   mock = serve deterministic in-process fixtures (no external traffic).
+  // Default is `live` on purpose: an unset value must never silently serve fake
+  // data (e.g. in production). Developers opt into `mock` explicitly in `.env`.
+  // The production guard below additionally rejects `mock` when NODE_ENV=production.
+  STOCK_DATA_MODE: z.enum(["live", "mock"]).default("live"),
   // Comma-separated list of additional allowed CORS origins.
   ALLOWED_ORIGINS: z
     .string()
@@ -53,7 +68,19 @@ const envSchema = z.object({
             .filter(Boolean)
         : []
     ),
-});
+  })
+  // Cross-field guard: never run the mock provider in production. This stops a
+  // stray `STOCK_DATA_MODE=mock` from shipping fake prices to real users; it is
+  // a startup error, surfaced like any other invalid env value.
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV === "production" && env.STOCK_DATA_MODE === "mock") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["STOCK_DATA_MODE"],
+        message: "mock data mode is not allowed when NODE_ENV=production.",
+      });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

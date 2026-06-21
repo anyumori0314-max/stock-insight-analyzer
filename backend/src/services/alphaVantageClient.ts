@@ -2,26 +2,33 @@ import {
   advisoryResponseSchema,
   timeSeriesDailyResponseSchema,
 } from "../schemas/alphaVantage";
-import { ApiError, type ErrorCode } from "../types/errors";
-import type { DailyBar, StockTimeSeries } from "../types/stock";
+import { ApiError, errorFor } from "../types/errors";
+import { isRealIsoDate } from "../utils/dates";
+import { SUPPORTED_RANGE, type DailyBar, type StockRange, type StockTimeSeries } from "../types/stock";
+import { classifyProviderMessage } from "./providerErrorClassifier";
 
 const DEFAULT_BASE_URL = "https://www.alphavantage.co/query";
 const DEFAULT_TIMEOUT_MS = 8_000;
 
-/** Logical default window. Compact daily ~= the latest 100 trading days. */
-export const DEFAULT_RANGE = "100d";
-
 /**
- * Hard cap on the number of daily points we will accept/process. `compact` is
- * ~100 points; this leaves generous headroom while guarding against an
- * unexpectedly huge response exhausting memory/CPU.
+ * Logical default (and currently only) window. `outputsize=compact` returns the
+ * latest ~100 trading days. Range is part of the cache key, so adding more
+ * windows later means adding both the fetch param and the enum — we never accept
+ * a range we do not actually fetch/slice for.
  */
-export const MAX_SERIES_POINTS = 400;
+export const DEFAULT_RANGE: StockRange = SUPPORTED_RANGE;
 
 /**
- * Minimal subset of the global `fetch` contract we depend on. Declaring it
- * explicitly keeps the client trivially mockable in tests — no DOM `Response`
- * instance required.
+ * Default hard cap on accepted daily points. `compact` is ~100; this leaves
+ * headroom while guarding against an unexpectedly huge response exhausting
+ * memory/CPU. Overridable via `ALPHA_VANTAGE_MAX_POINTS`.
+ */
+export const MAX_SERIES_POINTS = 120;
+
+/**
+ * Minimal subset of the global `fetch` contract we depend on. `headers` is
+ * optional so tests can supply a trivial stub; when present we use it to reject
+ * non-JSON responses before parsing.
  */
 export type FetchLike = (
   url: string,
@@ -29,6 +36,7 @@ export type FetchLike = (
 ) => Promise<{
   ok: boolean;
   status: number;
+  headers?: { get(name: string): string | null };
   json: () => Promise<unknown>;
 }>;
 
@@ -37,18 +45,14 @@ export interface AlphaVantageClientOptions {
   baseUrl?: string;
   /** Per-request timeout budget (ms). */
   timeoutMs?: number;
+  /** Hard cap on accepted daily points (defaults to {@link MAX_SERIES_POINTS}). */
+  maxPoints?: number;
   /** Injectable fetch implementation. Defaults to the global `fetch`. */
   fetchFn?: FetchLike;
 }
 
 export interface AlphaVantageClient {
-  fetchDailySeries(ticker: string, range?: string): Promise<StockTimeSeries>;
-}
-
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-function apiError(status: number, code: ErrorCode, message: string, details?: unknown): ApiError {
-  return new ApiError(status, code, message, details);
+  fetchDailySeries(ticker: string, range?: StockRange): Promise<StockTimeSeries>;
 }
 
 function buildUrl(baseUrl: string, ticker: string, apiKey: string): string {
@@ -62,110 +66,110 @@ function buildUrl(baseUrl: string, ticker: string, apiKey: string): string {
   return `${baseUrl}?${params.toString()}`;
 }
 
-/** Maps a non-2xx provider status to a public error. Bodies are never read. */
+/**
+ * Maps a non-2xx provider status to a public error. Bodies are never read; only
+ * a safe `HTTP <status>` tag is attached as (development-only) detail.
+ *
+ * - 429            -> PROVIDER_RATE_LIMITED
+ * - 408 / 504      -> PROVIDER_TIMEOUT
+ * - 401 / 403      -> API_KEY_INVALID (auth/forbidden ~ key/entitlement)
+ * - 400            -> PROVIDER_RESPONSE_INVALID (malformed request/response)
+ * - 500 / 502 / 503 / 404 / other -> PROVIDER_UNAVAILABLE
+ *
+ * 404 is deliberately mapped to PROVIDER_UNAVAILABLE, not SYMBOL_NOT_FOUND: a
+ * missing symbol is reported by Alpha Vantage with HTTP 200 + an advisory body,
+ * so we never infer "bad symbol" from an HTTP status alone.
+ */
 function classifyHttpStatus(status: number): ApiError {
-  if (status === 429) {
-    return apiError(
-      429,
-      "PROVIDER_RATE_LIMITED",
-      "The market data provider's rate limit was reached. Please try again later.",
-      `HTTP ${status}`
-    );
+  const detail = `HTTP ${status}`;
+  if (status === 429) return errorFor("PROVIDER_RATE_LIMITED", detail);
+  if (status === 408 || status === 504) return errorFor("PROVIDER_TIMEOUT", detail);
+  if (status === 401 || status === 403) return errorFor("API_KEY_INVALID", detail);
+  if (status === 400) return errorFor("PROVIDER_RESPONSE_INVALID", detail);
+  return errorFor("PROVIDER_UNAVAILABLE", detail);
+}
+
+/** Lowercased content-type (no params), or "" if headers are unavailable. */
+function readContentType(response: { headers?: { get(name: string): string | null } }): string {
+  try {
+    const raw = response.headers?.get?.("content-type") ?? "";
+    return typeof raw === "string" ? raw.split(";")[0]!.trim().toLowerCase() : "";
+  } catch {
+    return "";
   }
-  if (status === 401 || status === 403) {
-    return apiError(
-      401,
-      "API_KEY_INVALID",
-      "The market data provider rejected the API key.",
-      `HTTP ${status}`
-    );
-  }
-  if (status === 408 || status === 504) {
-    return apiError(
-      504,
-      "PROVIDER_TIMEOUT",
-      "The market data provider did not respond in time. Please try again.",
-      `HTTP ${status}`
-    );
-  }
-  return apiError(
-    502,
-    "PROVIDER_UNAVAILABLE",
-    "The market data provider is currently unavailable. Please try again later.",
-    `HTTP ${status}`
-  );
 }
 
 /**
  * Classifies the advisory envelopes Alpha Vantage returns (with HTTP 200) in
- * place of data and throws the matching public error. Each key is parsed on its
- * own — we do NOT blanket-map every `Information` to a rate limit.
+ * place of data and throws the matching public error. Each present channel is
+ * classified by message CONTENT (see {@link classifyProviderMessage}); the raw
+ * provider text is used only for that internal decision and never surfaced.
  */
-function throwOnAdvisory(payload: unknown, ticker: string): void {
+function throwOnAdvisory(payload: unknown): void {
   const advisory = advisoryResponseSchema.safeParse(payload);
   if (!advisory.success) {
     return;
   }
   const { "Error Message": errorMessage, Note: note, Information: info } = advisory.data;
 
-  if (errorMessage) {
-    if (/api[\s-]?key/i.test(errorMessage)) {
-      throw apiError(401, "API_KEY_INVALID", "The market data provider rejected the API key.", errorMessage);
-    }
-    throw apiError(404, "SYMBOL_NOT_FOUND", `No data is available for ticker "${ticker}".`, errorMessage);
+  if (errorMessage !== undefined) {
+    throw errorFor(classifyProviderMessage("errorMessage", errorMessage), "advisory:errorMessage");
   }
-
-  // `Note` is Alpha Vantage's classic per-minute throttle message.
-  if (note) {
-    throw apiError(
-      429,
-      "PROVIDER_RATE_LIMITED",
-      "The market data provider's rate limit was reached. Please try again later.",
-      note
-    );
+  if (note !== undefined) {
+    throw errorFor(classifyProviderMessage("note", note), "advisory:note");
   }
-
-  if (info) {
-    if (/rate limit|requests per (day|minute)|premium|subscribe|higher api call|thank you for using/i.test(info)) {
-      throw apiError(
-        429,
-        "PROVIDER_RATE_LIMITED",
-        "The market data provider's rate limit was reached. Please try again later.",
-        info
-      );
-    }
-    if (/api[\s-]?key/i.test(info)) {
-      throw apiError(401, "API_KEY_INVALID", "The market data provider rejected the API key.", info);
-    }
-    throw apiError(
-      502,
-      "PROVIDER_UNAVAILABLE",
-      "The market data provider returned an unexpected response.",
-      info
-    );
+  if (info !== undefined) {
+    throw errorFor(classifyProviderMessage("information", info), "advisory:information");
   }
 }
 
-/** True only for an ISO `YYYY-MM-DD` string that denotes a real calendar day. */
-function isRealIsoDate(value: string): boolean {
-  if (!ISO_DATE.test(value)) {
-    return false;
+/**
+ * True only for a media type we will parse as JSON: exactly `application/json`
+ * or any structured-suffix `+json` type (e.g. `application/problem+json`,
+ * `application/vnd.api+json`). Deliberately strict: `application/notjson`,
+ * `text/jsonish` and `application/jsonp` are NOT JSON.
+ */
+function isJsonMediaType(mediaType: string): boolean {
+  return mediaType === "application/json" || mediaType.endsWith("+json");
+}
+
+/**
+ * Lightweight guard run BEFORE the full per-row Zod parse: bounds the work done
+ * on an unexpectedly huge or malformed payload. Only inspects the shape and key
+ * count of `Time Series (Daily)` — it never reads bar values or logs the body.
+ */
+function preCheckSeriesSize(payload: unknown, maxPoints: number): void {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return; // not an object: the full schema reports the shape error.
   }
-  const [y, m, d] = value.split("-").map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  return (
-    date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
-  );
+  const timeSeries = (payload as Record<string, unknown>)["Time Series (Daily)"];
+  if (timeSeries === undefined) {
+    return; // advisory or missing series: handled downstream.
+  }
+  if (typeof timeSeries !== "object" || timeSeries === null || Array.isArray(timeSeries)) {
+    throw errorFor("PROVIDER_RESPONSE_INVALID", "timeseries-shape");
+  }
+  if (Object.keys(timeSeries).length > maxPoints) {
+    // Reject up front — never slice/truncate silently — so we don't deep-parse a
+    // huge object.
+    throw errorFor("PROVIDER_RESPONSE_INVALID", "too-many-points");
+  }
 }
 
 /**
  * Cross-field validates and normalizes a parsed success payload into a clean,
  * ascending `StockTimeSeries`. Any structural violation is a
  * `PROVIDER_RESPONSE_INVALID`; an empty series is `INSUFFICIENT_DATA`.
+ *
+ * Policy: a single inconsistent row rejects the WHOLE payload rather than being
+ * silently dropped. Dropping rows would corrupt period return / drawdown / RSI
+ * and present provider anomalies as valid analysis — unacceptable for a public
+ * analysis tool, so we fail loud and safe instead of silently "fixing" data.
  */
 function normalize(
   ticker: string,
-  range: string,
+  range: StockRange,
+  maxPoints: number,
   data: ReturnType<typeof timeSeriesDailyResponseSchema.parse>
 ): StockTimeSeries {
   const meta = data["Meta Data"];
@@ -173,21 +177,13 @@ function normalize(
   const warnings: string[] = [];
 
   // Meta integrity: the returned symbol must match what we asked for.
-  if (meta["2. Symbol"].toUpperCase() !== ticker.toUpperCase()) {
-    throw apiError(
-      502,
-      "PROVIDER_RESPONSE_INVALID",
-      "The market data provider returned data for a different symbol."
-    );
+  if (meta["2. Symbol"].trim().toUpperCase() !== ticker.trim().toUpperCase()) {
+    throw errorFor("PROVIDER_RESPONSE_INVALID", "symbol-mismatch");
   }
 
   const entries = Object.entries(series);
-  if (entries.length > MAX_SERIES_POINTS) {
-    throw apiError(
-      502,
-      "PROVIDER_RESPONSE_INVALID",
-      "The market data provider returned more data than expected."
-    );
+  if (entries.length > maxPoints) {
+    throw errorFor("PROVIDER_RESPONSE_INVALID", "too-many-points");
   }
 
   const byDate = new Map<string, DailyBar>();
@@ -195,11 +191,7 @@ function normalize(
 
   for (const [date, bar] of entries) {
     if (!isRealIsoDate(date)) {
-      throw apiError(
-        502,
-        "PROVIDER_RESPONSE_INVALID",
-        "The market data provider returned an invalid date."
-      );
+      throw errorFor("PROVIDER_RESPONSE_INVALID", "invalid-date");
     }
 
     const open = bar["1. open"];
@@ -209,27 +201,13 @@ function normalize(
     const volume = bar["5. volume"];
 
     // Prices are already finite/positive (schema); enforce OHLC consistency.
-    if (
-      high < low ||
-      high < open ||
-      high < close ||
-      low > open ||
-      low > close
-    ) {
-      throw apiError(
-        502,
-        "PROVIDER_RESPONSE_INVALID",
-        "The market data provider returned inconsistent OHLC values."
-      );
+    if (high < low || high < open || high < close || low > open || low > close) {
+      throw errorFor("PROVIDER_RESPONSE_INVALID", "ohlc-inconsistent");
     }
 
-    // Volume must be a non-negative, safe integer (no fractions / overflow).
-    if (!Number.isInteger(volume) || volume < 0 || volume > Number.MAX_SAFE_INTEGER) {
-      throw apiError(
-        502,
-        "PROVIDER_RESPONSE_INVALID",
-        "The market data provider returned an invalid volume."
-      );
+    // Volume must be a non-negative SAFE integer (no fractions / overflow / NaN).
+    if (!Number.isSafeInteger(volume) || volume < 0) {
+      throw errorFor("PROVIDER_RESPONSE_INVALID", "invalid-volume");
     }
 
     if (byDate.has(date)) {
@@ -248,11 +226,7 @@ function normalize(
   );
 
   if (bars.length === 0) {
-    throw apiError(
-      422,
-      "INSUFFICIENT_DATA",
-      `Not enough data is available for ticker "${ticker}".`
-    );
+    throw errorFor("INSUFFICIENT_DATA", "empty-series");
   }
 
   return {
@@ -278,6 +252,7 @@ export function createAlphaVantageClient(
 ): AlphaVantageClient {
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxPoints = Math.max(1, Math.floor(options.maxPoints ?? MAX_SERIES_POINTS));
   const fetchFn = options.fetchFn ?? (globalThis.fetch as FetchLike | undefined);
 
   if (typeof fetchFn !== "function") {
@@ -285,7 +260,7 @@ export function createAlphaVantageClient(
   }
 
   return {
-    async fetchDailySeries(ticker: string, range: string = DEFAULT_RANGE): Promise<StockTimeSeries> {
+    async fetchDailySeries(ticker: string, range: StockRange = DEFAULT_RANGE): Promise<StockTimeSeries> {
       const url = buildUrl(baseUrl, ticker, options.apiKey);
 
       // Real AbortController + timer (not AbortSignal.timeout) so the timer is
@@ -300,17 +275,9 @@ export function createAlphaVantageClient(
           response = await fetchFn(url, { signal: controller.signal });
         } catch {
           if (controller.signal.aborted) {
-            throw apiError(
-              504,
-              "PROVIDER_TIMEOUT",
-              "The market data provider did not respond in time. Please try again."
-            );
+            throw errorFor("PROVIDER_TIMEOUT");
           }
-          throw apiError(
-            502,
-            "PROVIDER_UNAVAILABLE",
-            "The market data provider is currently unavailable. Please try again later."
-          );
+          throw errorFor("PROVIDER_UNAVAILABLE");
         }
 
         // 2. HTTP status.
@@ -318,34 +285,43 @@ export function createAlphaVantageClient(
           throw classifyHttpStatus(response.status);
         }
 
-        // 3. JSON parse (non-JSON / HTML pages reject here).
+        // 3. Content-Type guard. Only `application/json` (or a `+json` suffix
+        // type) is parsed; a non-JSON 200 (HTML/text proxy or maintenance page,
+        // or look-alikes like `application/notjson`) is rejected without
+        // parsing. Only the safe mime type — not the body — is attached as
+        // detail. A MISSING content-type is allowed through to JSON parsing
+        // because Alpha Vantage sometimes omits the header on valid responses.
+        const contentType = readContentType(response);
+        if (contentType && !isJsonMediaType(contentType)) {
+          throw errorFor("PROVIDER_RESPONSE_INVALID", `content-type:${contentType}`);
+        }
+
+        // 4. JSON parse (non-JSON / HTML pages / empty body reject here).
         let payload: unknown;
         try {
           payload = await response.json();
         } catch {
-          throw apiError(
-            502,
-            "PROVIDER_RESPONSE_INVALID",
-            "The market data provider returned an unreadable (non-JSON) response."
-          );
+          throw errorFor("PROVIDER_RESPONSE_INVALID", "json-parse");
         }
 
-        // 4. Advisory (error / rate-limit) envelopes.
-        throwOnAdvisory(payload, ticker);
+        // 5. Advisory (error / rate-limit) envelopes.
+        throwOnAdvisory(payload);
 
-        // 5. Success-shape schema.
+        // 6. Early size/shape guard BEFORE the heavy per-row Zod parse, so an
+        // oversized or malformed series cannot force deep validation of every row.
+        preCheckSeriesSize(payload, maxPoints);
+
+        // 7. Success-shape schema.
         const parsed = timeSeriesDailyResponseSchema.safeParse(payload);
         if (!parsed.success) {
-          throw apiError(
-            502,
+          throw errorFor(
             "PROVIDER_RESPONSE_INVALID",
-            "The market data provider returned data in an unexpected format.",
             parsed.error.issues.map((issue) => issue.message)
           );
         }
 
-        // 6. Cross-field validation + normalization.
-        return normalize(ticker, range, parsed.data);
+        // 8. Cross-field validation + normalization.
+        return normalize(ticker, range, maxPoints, parsed.data);
       } finally {
         clearTimeout(timer);
       }

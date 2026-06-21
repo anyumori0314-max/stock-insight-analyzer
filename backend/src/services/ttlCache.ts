@@ -39,8 +39,18 @@ export interface TtlCache<T> {
   get(key: string): T | undefined;
   /** Like `get` but also returns the entry's absolute expiry (epoch ms). */
   getWithMeta(key: string): { value: T; expiresAt: number } | undefined;
-  /** Stores a value and returns its absolute expiry (epoch ms). */
-  set(key: string, value: T): number;
+  /**
+   * Stores a value and returns its absolute expiry (epoch ms). An explicit
+   * `expiresAt` may be supplied so the caller can stamp/validate the value with
+   * the exact expiry it will be stored under (see {@link TtlCache.peekExpiry}).
+   */
+  set(key: string, value: T, expiresAt?: number): number;
+  /**
+   * The absolute expiry (epoch ms) a value stored *now* would receive — without
+   * storing anything. Lets a caller compute the expiry, build/validate the final
+   * value, and then `set` it with the same expiry.
+   */
+  peekExpiry(): number;
   has(key: string): boolean;
   delete(key: string): void;
   clear(): void;
@@ -96,16 +106,18 @@ export function createTtlCache<T>(options: TtlCacheOptions): TtlCache<T> {
       const entry = readFresh(key);
       return entry ? { value: entry.value, expiresAt: entry.expiresAt } : undefined;
     },
-    set(key, value) {
+    set(key, value, expiresAt = now() + ttlMs) {
       // Re-inserting moves the key to the tail; remove first so capacity logic
       // and ordering are consistent.
       store.delete(key);
       while (store.size >= maxEntries) {
         evictOne();
       }
-      const expiresAt = now() + ttlMs;
       store.set(key, { value, expiresAt });
       return expiresAt;
+    },
+    peekExpiry() {
+      return now() + ttlMs;
     },
     has(key) {
       return readFresh(key) !== undefined;

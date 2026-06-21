@@ -50,16 +50,16 @@ function buildSummary(props: PriceChartProps): string {
   const first = bars[0];
   const last = bars[bars.length - 1];
   const basisText = priceBasis === "close" ? "終値（調整前）" : "調整後終値";
-  const currencyText = currency ?? "USD想定";
+  const currencyText = currency ?? "不明";
   return (
     `価格チャート要約：期間 ${range}（${first.date}〜${last.date}）、` +
     `価格基準 ${basisText}、通貨 ${currencyText}。` +
-    `最新終値 ${formatPrice(last.close)}。トレンドは${TREND_TEXT[trend]}。`
+    `最新終値 ${formatPrice(last.close, currency)}。トレンドは${TREND_TEXT[trend]}。`
   );
 }
 
 export function PriceChart(props: PriceChartProps) {
-  const { bars } = props;
+  const { bars, currency } = props;
   const summary = buildSummary(props);
 
   if (bars.length === 0) {
@@ -85,14 +85,14 @@ export function PriceChart(props: PriceChartProps) {
               stroke={AXIS_COLOR}
               tick={{ fontSize: 12 }}
               domain={["auto", "auto"]}
-              width={56}
-              tickFormatter={(value: number) => `$${value.toFixed(0)}`}
+              width={64}
+              tickFormatter={(value: number) => formatPrice(value, currency, 0)}
             />
             <Tooltip
               contentStyle={TOOLTIP_STYLE}
               labelStyle={{ color: "#9aa6c4" }}
               formatter={(value: unknown) =>
-                typeof value === "number" ? `$${value.toFixed(2)}` : String(value)
+                typeof value === "number" ? formatPrice(value, currency) : String(value)
               }
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />

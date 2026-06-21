@@ -72,9 +72,15 @@ export function buildStockReport(series: StockTimeSeries): StockReport {
       `利用可能な履歴が${series.bars.length}日分のため、一部の指標（50日移動平均など）は算出できない場合があります。`
     );
   }
+  // De-duplicate while preserving first-seen order so the public `warnings`
+  // array is deterministic and never repeats the same note.
+  const dedupedWarnings = [...new Set(warnings)];
 
   return {
     ticker: series.ticker,
+    // Placeholder; the service overwrites it with the active data mode (like
+    // `cache`). buildStockReport is pure and provider-agnostic.
+    source: "live",
     range: series.range,
     currency: series.currency,
     timezone: series.timezone,
@@ -83,7 +89,7 @@ export function buildStockReport(series: StockTimeSeries): StockReport {
     series: points,
     metrics,
     analysis: analyze(metrics),
-    warnings,
+    warnings: dedupedWarnings,
     cache: { hit: false, expiresAt: null },
     disclaimer: DISCLAIMER,
   };

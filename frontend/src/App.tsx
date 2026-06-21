@@ -10,13 +10,14 @@ import { Sidebar } from "./components/Sidebar";
 import { TickerTabs } from "./components/TickerTabs";
 import { useStockReports } from "./hooks/useStockReports";
 
-const INITIAL_TICKERS = ["AAPL", "MSFT", "NVDA"];
 const PANEL_ID = "stock-panel";
 
 function App() {
-  const [selected, setSelected] = useState<string[]>(INITIAL_TICKERS);
-  const [activeTicker, setActiveTicker] = useState<string | null>(INITIAL_TICKERS[0]);
-  const { reports, refetch } = useStockReports(selected);
+  // Start empty: nothing is selected and nothing is fetched until the user picks
+  // a ticker, so the initial render makes ZERO API calls.
+  const [selected, setSelected] = useState<string[]>([]);
+  const [activeTicker, setActiveTicker] = useState<string | null>(null);
+  const { reports, pending, request, refetch, forget } = useStockReports();
 
   const panelHeadingRef = useRef<HTMLHeadingElement>(null);
   const lastFocusedRef = useRef<string>("");
@@ -32,8 +33,19 @@ function App() {
     }
   }, [selected, activeTicker]);
 
+  // Lazily fetch the active ticker (and only it). Preset/tab/add all flow through
+  // `activeTicker`, so exactly one symbol is requested per selection. `request`
+  // is a no-op when already loaded/in flight, so StrictMode's double-invoke and
+  // re-selecting a ticker never issue extra calls.
+  useEffect(() => {
+    if (activeTicker) {
+      request(activeTicker);
+    }
+  }, [activeTicker, request]);
+
   const activeState = activeTicker ? reports[activeTicker] : undefined;
   const activeStatus = activeState?.status;
+  const activePending = activeTicker ? Boolean(pending[activeTicker]) : false;
 
   // Move focus to the panel heading when the active ticker finishes loading
   // (success or error), once per transition, so keyboard/SR users land on the
@@ -56,6 +68,9 @@ function App() {
 
   function handleRemove(ticker: string) {
     setSelected((prev) => prev.filter((item) => item !== ticker));
+    // Abort any in-flight request and drop kept state so a late response cannot
+    // revive the removed ticker (and a re-add starts a fresh request).
+    forget(ticker);
   }
 
   return (
@@ -69,7 +84,10 @@ function App() {
           {selected.length === 0 ? (
             <section className="card">
               <div className="empty-hint">
-                左のFANG+参考プリセットを選ぶか、ティッカーを入力して分析を開始してください。
+                <p>銘柄を選択すると株価データを取得します。</p>
+                <p className="muted">
+                  左のFANG+参考プリセットを選ぶか、ティッカーを入力して分析を開始してください。
+                </p>
               </div>
             </section>
           ) : (
@@ -109,13 +127,20 @@ function App() {
                           type="button"
                           className="btn btn--ghost"
                           onClick={() => refetch(activeTicker)}
+                          disabled={activePending}
+                          aria-disabled={activePending}
                         >
-                          再試行
+                          {activePending ? "再試行中…" : "再試行"}
                         </button>
                       )}
                     </div>
                   ) : (
                     <>
+                      {activeState.report.source === "mock" && (
+                        <p className="state state--mock" role="status">
+                          開発用モックデータを表示しています。
+                        </p>
+                      )}
                       <p className="muted">
                         {activeState.report.ticker}・最終更新 {activeState.report.lastRefreshed ?? "—"}
                         （{activeState.report.timezone ?? "—"}）

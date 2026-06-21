@@ -14,10 +14,55 @@ import { z } from "zod";
  * schemas below only describe the success payload.
  */
 
-/** A positive, finite price coerced from the provider's string value. */
-const priceString = z.coerce.number().finite().positive();
-/** Volume can legitimately be 0 (e.g. holidays/halts), so allow non-negative. */
-const volumeString = z.coerce.number().finite().nonnegative();
+/**
+ * Strict numeric string from the provider. Unlike `z.coerce.number()` — which
+ * silently turns "", "   ", null, true and [] into 0/1 — this accepts ONLY a
+ * finite number or a non-empty numeric string. Surrounding whitespace is
+ * trimmed (provider quirk tolerance), but the trimmed content must be a pure
+ * numeric literal (so "123abc" is rejected, not partially parsed).
+ */
+const NUMERIC_STRING = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function providerNumber(opts: { positive?: boolean; integer?: boolean }) {
+  return z.unknown().transform((value, ctx): number => {
+    let num: number;
+    if (typeof value === "number") {
+      num = value;
+    } else if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed === "" || !NUMERIC_STRING.test(trimmed)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expected a numeric string" });
+        return z.NEVER;
+      }
+      num = Number(trimmed);
+    } else {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expected a number or numeric string" });
+      return z.NEVER;
+    }
+    // Rejects NaN, ±Infinity and overflow (e.g. "1e309" -> Infinity).
+    if (!Number.isFinite(num)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expected a finite number" });
+      return z.NEVER;
+    }
+    if (opts.positive ? !(num > 0) : num < 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: opts.positive ? "Expected a positive number" : "Expected a non-negative number",
+      });
+      return z.NEVER;
+    }
+    if (opts.integer && !Number.isSafeInteger(num)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Expected a safe integer" });
+      return z.NEVER;
+    }
+    return num;
+  });
+}
+
+/** A positive, finite price. */
+const priceString = providerNumber({ positive: true });
+/** Volume: a non-negative SAFE integer (0 is legitimate on holidays/halts). */
+const volumeString = providerNumber({ integer: true });
 
 export const rawDailyBarSchema = z.object({
   "1. open": priceString,

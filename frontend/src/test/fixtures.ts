@@ -4,6 +4,7 @@ import type { StockReport } from "../types/stock";
 export function makeReport(overrides: Partial<StockReport> = {}): StockReport {
   return {
     ticker: "AAPL",
+    source: "live",
     range: "100d",
     currency: null,
     timezone: "US/Eastern",

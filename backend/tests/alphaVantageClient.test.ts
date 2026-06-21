@@ -18,7 +18,7 @@ function bar(open: number, high: number, low: number, close: number, volume: num
   };
 }
 
-function successPayload(symbol: string, series: Record<string, ReturnType<typeof bar>>) {
+function successPayload(symbol: string, series: Record<string, unknown>) {
   return {
     "Meta Data": {
       "1. Information": "Daily Prices",
@@ -45,6 +45,32 @@ function fetchNonJson(init: { ok?: boolean; status?: number } = {}): FetchLike {
     status: init.status ?? 200,
     json: async () => {
       throw new SyntaxError("Unexpected token < in JSON");
+    },
+  }));
+}
+
+/** Fetch stub with a controllable content-type header and JSON behavior. */
+function fetchWith(
+  payload: unknown,
+  init: {
+    ok?: boolean;
+    status?: number;
+    contentType?: string | null;
+    throwJson?: boolean;
+  } = {}
+): FetchLike {
+  return vi.fn(async () => ({
+    ok: init.ok ?? true,
+    status: init.status ?? 200,
+    headers: {
+      get: (name: string) =>
+        name.toLowerCase() === "content-type" ? (init.contentType ?? null) : null,
+    },
+    json: async () => {
+      if (init.throwJson) {
+        throw new SyntaxError("Unexpected end of JSON input");
+      }
+      return payload;
     },
   }));
 }
@@ -285,7 +311,165 @@ describe("alphaVantageClient — timeout (fake timers)", () => {
   });
 });
 
-describe("alphaVantageClient — secret non-disclosure", () => {
+describe("alphaVantageClient — HTTP 400 / 408 / unknown status", () => {
+  const cases: Array<[number, string, number]> = [
+    [400, "PROVIDER_RESPONSE_INVALID", 502],
+    [408, "PROVIDER_TIMEOUT", 504],
+    [418, "PROVIDER_UNAVAILABLE", 502], // unknown -> safe fallback
+  ];
+
+  it.each(cases)("HTTP %i -> %s", async (httpStatus, code, status) => {
+    const client = makeClient(fetchReturning({}, { ok: false, status: httpStatus }));
+    await expect(client.fetchDailySeries("IBM")).rejects.toMatchObject({ status, code });
+  });
+});
+
+describe("alphaVantageClient — Content-Type handling", () => {
+  const okBar = { "2026-06-18": bar(1, 2, 1, 1.5, 10) };
+
+  it("accepts application/json with a charset parameter", async () => {
+    const fetchFn = fetchWith(successPayload("IBM", okBar), {
+      contentType: "application/json; charset=utf-8",
+    });
+    const series = await makeClient(fetchFn).fetchDailySeries("IBM");
+    expect(series.ticker).toBe("IBM");
+  });
+
+  it("accepts a response with no Content-Type header (parses JSON)", async () => {
+    const fetchFn = fetchWith(successPayload("IBM", okBar), { contentType: null });
+    const series = await makeClient(fetchFn).fetchDailySeries("IBM");
+    expect(series.bars).toHaveLength(1);
+  });
+
+  it("rejects a text/html 200 page WITHOUT parsing it -> PROVIDER_RESPONSE_INVALID", async () => {
+    // json() would succeed, but the content-type gate must reject first.
+    const fetchFn = fetchWith(successPayload("IBM", okBar), { contentType: "text/html" });
+    await expect(makeClient(fetchFn).fetchDailySeries("IBM")).rejects.toMatchObject({
+      status: 502,
+      code: "PROVIDER_RESPONSE_INVALID",
+    });
+  });
+
+  it("rejects text/plain -> PROVIDER_RESPONSE_INVALID", async () => {
+    const fetchFn = fetchWith("just text", { contentType: "text/plain" });
+    await expect(makeClient(fetchFn).fetchDailySeries("IBM")).rejects.toMatchObject({
+      code: "PROVIDER_RESPONSE_INVALID",
+    });
+  });
+
+  it("maps an empty / malformed JSON body to PROVIDER_RESPONSE_INVALID", async () => {
+    const fetchFn = fetchWith(undefined, { contentType: "application/json", throwJson: true });
+    await expect(makeClient(fetchFn).fetchDailySeries("IBM")).rejects.toMatchObject({
+      code: "PROVIDER_RESPONSE_INVALID",
+    });
+  });
+
+  // Strict media-type matching: only `application/json` or a `+json` suffix.
+  const mediaTypes: Array<[string, boolean]> = [
+    ["application/json", true],
+    ["application/json; charset=utf-8", true],
+    ["Application/JSON", true],
+    ["application/problem+json", true],
+    ["application/vnd.api+json", true],
+    ["application/notjson", false],
+    ["text/jsonish", false],
+    ["application/jsonp", false],
+  ];
+
+  it.each(mediaTypes)("treats Content-Type %s as JSON=%s", async (contentType, isJson) => {
+    const fetchFn = fetchWith(successPayload("IBM", okBar), { contentType });
+    const promise = makeClient(fetchFn).fetchDailySeries("IBM");
+    if (isJson) {
+      await expect(promise).resolves.toMatchObject({ ticker: "IBM" });
+    } else {
+      await expect(promise).rejects.toMatchObject({ code: "PROVIDER_RESPONSE_INVALID" });
+    }
+  });
+});
+
+describe("alphaVantageClient — advisory classification (HTTP 200)", () => {
+  const cases: Array<[string, "Error Message" | "Note" | "Information", string]> = [
+    ["entitlement/premium endpoint", "Information", "This is a premium endpoint."],
+    ["unsupported function", "Information", "unsupported function for your plan"],
+    ["daily quota", "Information", "You have reached your daily quota of requests."],
+    ["malformed symbol", "Error Message", "malformed symbol provided"],
+    ["unknown Error Message -> symbol", "Error Message", "totally unrecognized text"],
+    ["unknown Information -> unavailable", "Information", "totally unrecognized text"],
+  ];
+
+  const expected: Record<string, string> = {
+    "This is a premium endpoint.": "API_KEY_INVALID",
+    "unsupported function for your plan": "API_KEY_INVALID",
+    "You have reached your daily quota of requests.": "PROVIDER_RATE_LIMITED",
+    "malformed symbol provided": "SYMBOL_NOT_FOUND",
+  };
+
+  it.each(cases)("%s", async (_label, key, message) => {
+    const client = makeClient(fetchReturning({ [key]: message }));
+    const expectedCode =
+      expected[message] ?? (key === "Error Message" ? "SYMBOL_NOT_FOUND" : "PROVIDER_UNAVAILABLE");
+    await expect(client.fetchDailySeries("IBM")).rejects.toMatchObject({ code: expectedCode });
+  });
+});
+
+describe("alphaVantageClient — max points (early guard before per-row parse)", () => {
+  function seriesOfSize(n: number, makeBar: () => unknown = () => bar(1, 2, 1, 1.5, 10)) {
+    const series: Record<string, unknown> = {};
+    for (let i = 0; i < n; i += 1) {
+      series[new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10)] = makeBar();
+    }
+    return series;
+  }
+  function clientWith(payload: unknown, maxPoints = 5) {
+    return createAlphaVantageClient({
+      apiKey: "K",
+      baseUrl: BASE_URL,
+      fetchFn: fetchReturning(payload),
+      maxPoints,
+    });
+  }
+
+  it("accepts exactly maxPoints rows", async () => {
+    const result = await clientWith(successPayload("IBM", seriesOfSize(5))).fetchDailySeries("IBM");
+    expect(result.bars).toHaveLength(5);
+  });
+
+  it("rejects maxPoints + 1 rows up front (details=too-many-points, no truncation)", async () => {
+    await expect(
+      clientWith(successPayload("IBM", seriesOfSize(6))).fetchDailySeries("IBM")
+    ).rejects.toMatchObject({ code: "PROVIDER_RESPONSE_INVALID", details: "too-many-points" });
+  });
+
+  it("short-circuits BEFORE per-row parse: oversized + invalid rows still report size", async () => {
+    // Each row is structurally invalid. If the size guard did NOT run first, the
+    // failure would be a schema/parse error rather than "too-many-points".
+    const invalid = seriesOfSize(6, () => ({ garbage: true }));
+    await expect(
+      clientWith(successPayload("IBM", invalid)).fetchDailySeries("IBM")
+    ).rejects.toMatchObject({ details: "too-many-points" });
+  });
+
+  it.each([
+    ["array", [] as unknown],
+    ["null", null as unknown],
+    ["string", "oops" as unknown],
+  ])("rejects a non-object Time Series (%s) with details=timeseries-shape", async (_label, ts) => {
+    const payload = {
+      "Meta Data": {
+        "2. Symbol": "IBM",
+        "3. Last Refreshed": "2026-06-19",
+        "5. Time Zone": "US/Eastern",
+      },
+      "Time Series (Daily)": ts,
+    };
+    await expect(clientWith(payload).fetchDailySeries("IBM")).rejects.toMatchObject({
+      code: "PROVIDER_RESPONSE_INVALID",
+      details: "timeseries-shape",
+    });
+  });
+});
+
+describe("alphaVantageClient — secret & provider-message non-disclosure", () => {
   it("never includes the API key in thrown errors", async () => {
     const apiKey = "TOP_SECRET_KEY_123";
     const client = makeClient(fetchReturning({ "Error Message": "Invalid API call." }), apiKey);
@@ -298,6 +482,38 @@ describe("alphaVantageClient — secret non-disclosure", () => {
         details: (err as { details?: unknown }).details,
       });
       expect(serialized).not.toContain(apiKey);
+    }
+  });
+
+  it("never echoes the provider's raw advisory message", async () => {
+    const rawMessage = "PROPRIETARY-PROVIDER-INTERNAL-NOTE-9f8a";
+    const client = makeClient(fetchReturning({ Information: `Rate limit. ${rawMessage}` }));
+    try {
+      await client.fetchDailySeries("IBM");
+      throw new Error("expected rejection");
+    } catch (err) {
+      const serialized = JSON.stringify({
+        message: (err as Error).message,
+        details: (err as { details?: unknown }).details,
+      });
+      expect(serialized).not.toContain(rawMessage);
+    }
+  });
+
+  it("never includes the provider URL or API key in HTTP-status errors", async () => {
+    const apiKey = "URL_LEAK_KEY";
+    const client = makeClient(fetchReturning({}, { ok: false, status: 500 }), apiKey);
+    try {
+      await client.fetchDailySeries("IBM");
+      throw new Error("expected rejection");
+    } catch (err) {
+      const serialized = JSON.stringify({
+        message: (err as Error).message,
+        details: (err as { details?: unknown }).details,
+      });
+      expect(serialized).not.toContain(apiKey);
+      expect(serialized).not.toContain("alphavantage.co");
+      expect(serialized).not.toContain("apikey=");
     }
   });
 });

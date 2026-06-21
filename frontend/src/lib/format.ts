@@ -21,11 +21,37 @@ export function formatPercent(value: number | null | undefined, fractionDigits =
   return `${sign}${value.toFixed(fractionDigits)}%`;
 }
 
-export function formatPrice(value: number | null | undefined): string {
+/**
+ * Formats a price using the report's currency.
+ *
+ * - `currency` known (e.g. "USD", "JPY") -> `Intl.NumberFormat` currency style.
+ * - `currency` null/unknown -> a PLAIN number (no symbol). We never assume "$" /
+ *   "USD": `TIME_SERIES_DAILY` does not report a currency, so guessing one would
+ *   mislabel non-USD listings.
+ * - An invalid/unsupported code falls back to the number plus the raw code, so
+ *   we still never invent a symbol.
+ */
+export function formatPrice(
+  value: number | null | undefined,
+  currency: string | null = null,
+  fractionDigits = 2
+): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return DASH;
   }
-  return `$${formatNumber(value)}`;
+  if (currency) {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: fractionDigits,
+      }).format(value);
+    } catch {
+      return `${formatNumber(value, fractionDigits)} ${currency}`;
+    }
+  }
+  return formatNumber(value, fractionDigits);
 }
 
 /** Sign of a value as a CSS-friendly direction token (for coloring). */

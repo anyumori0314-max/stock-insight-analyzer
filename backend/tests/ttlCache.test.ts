@@ -39,6 +39,21 @@ describe("createTtlCache — basic TTL", () => {
     cache.set("a", "x");
     expect(cache.getWithMeta("a")).toEqual({ value: "x", expiresAt: 1_500 });
   });
+
+  it("peekExpiry returns the prospective expiry WITHOUT storing", () => {
+    let clock = 1_000;
+    const cache = createTtlCache<string>({ ttlMs: 500, maxEntries: 10, now: () => clock });
+    expect(cache.peekExpiry()).toBe(1_500);
+    expect(cache.size).toBe(0); // nothing stored
+  });
+
+  it("set honors an explicit expiresAt (so caller stamps == stored expiry)", () => {
+    let clock = 1_000;
+    const cache = createTtlCache<string>({ ttlMs: 500, maxEntries: 10, now: () => clock });
+    const expiresAt = cache.peekExpiry();
+    expect(cache.set("a", "x", expiresAt)).toBe(expiresAt);
+    expect(cache.getWithMeta("a")).toEqual({ value: "x", expiresAt });
+  });
 });
 
 describe("createTtlCache — max entries & eviction", () => {

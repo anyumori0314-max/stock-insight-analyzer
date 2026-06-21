@@ -47,6 +47,85 @@ export interface ErrorResponseBody {
 }
 
 /**
+ * Single source of truth for every public error code.
+ *
+ * Each descriptor pins the HTTP status, the stable public message (already
+ * safe to expose — it never contains provider raw bodies, URLs, keys, stacks or
+ * paths) and whether the client may meaningfully retry. The provider client and
+ * service build errors from this catalog (`errorFor`) so status / message /
+ * retry semantics cannot drift between call sites.
+ */
+export interface ErrorDescriptor {
+  status: number;
+  message: string;
+  /** True when the same request may succeed if retried later (transient). */
+  retryable: boolean;
+}
+
+export const ERROR_CATALOG: Record<ErrorCode, ErrorDescriptor> = {
+  VALIDATION_ERROR: { status: 400, message: "The request was invalid.", retryable: false },
+  INVALID_TICKER: { status: 400, message: "The ticker format is invalid.", retryable: false },
+  INVALID_JSON: { status: 400, message: "The request body contains invalid JSON.", retryable: false },
+  PAYLOAD_TOO_LARGE: { status: 413, message: "The request body is too large.", retryable: false },
+  FORBIDDEN_ORIGIN: { status: 403, message: "Origin is not allowed.", retryable: false },
+  NOT_FOUND: { status: 404, message: "The requested resource was not found.", retryable: false },
+  RATE_LIMITED: { status: 429, message: "Too many requests. Please slow down.", retryable: true },
+  INTERNAL_SERVER_ERROR: { status: 500, message: "An unexpected error occurred.", retryable: false },
+  NOT_IMPLEMENTED: { status: 501, message: "This feature is not implemented.", retryable: false },
+  // --- Provider (Alpha Vantage) integration ---------------------------------
+  API_KEY_MISSING: {
+    status: 503,
+    message: "Stock data is temporarily unavailable. The market data API key is not configured.",
+    retryable: false,
+  },
+  API_KEY_INVALID: {
+    status: 401,
+    message: "The market data provider rejected the API key.",
+    retryable: false,
+  },
+  PROVIDER_RATE_LIMITED: {
+    status: 429,
+    message: "The market data provider's rate limit was reached. Please try again later.",
+    retryable: true,
+  },
+  PROVIDER_TIMEOUT: {
+    status: 504,
+    message: "The market data provider did not respond in time. Please try again.",
+    retryable: true,
+  },
+  PROVIDER_UNAVAILABLE: {
+    status: 502,
+    message: "The market data provider is currently unavailable. Please try again later.",
+    retryable: true,
+  },
+  PROVIDER_RESPONSE_INVALID: {
+    status: 502,
+    message: "The market data provider returned an unexpected response.",
+    retryable: false,
+  },
+  SYMBOL_NOT_FOUND: {
+    status: 404,
+    message: "No data is available for the requested ticker.",
+    retryable: false,
+  },
+  INSUFFICIENT_DATA: {
+    status: 422,
+    message: "Not enough data is available to analyze this ticker.",
+    retryable: false,
+  },
+};
+
+/**
+ * Builds an {@link ApiError} from the catalog. `details` is for development-only
+ * diagnostics (the error handler strips it outside development); pass only
+ * safe, internal tags here — never provider raw bodies, URLs or the API key.
+ */
+export function errorFor(code: ErrorCode, details?: unknown): ApiError {
+  const descriptor = ERROR_CATALOG[code];
+  return new ApiError(descriptor.status, code, descriptor.message, details);
+}
+
+/**
  * Application error carrying an HTTP status and a stable, public error code.
  * Thrown from routes/middleware and translated into a unified JSON body by
  * the central error handler.

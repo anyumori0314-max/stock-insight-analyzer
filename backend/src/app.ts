@@ -71,8 +71,10 @@ export function createApp(options: CreateAppOptions): Express {
     options.stockService ??
     createStockService({
       apiKey: env.ALPHA_VANTAGE_API_KEY,
+      dataMode: env.STOCK_DATA_MODE,
       timeoutMs: env.ALPHA_VANTAGE_TIMEOUT_MS,
-      cacheTtlMs: env.STOCK_CACHE_TTL_MS,
+      maxPoints: env.ALPHA_VANTAGE_MAX_POINTS,
+      cacheTtlMs: env.STOCK_CACHE_TTL_SECONDS * 1000,
       cacheMaxEntries: env.STOCK_CACHE_MAX_ENTRIES,
     });
 

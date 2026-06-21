@@ -16,10 +16,25 @@ describe("format helpers", () => {
     expect(formatPercent(Number.NaN)).toBe("—");
   });
 
-  it("formats prices and signed percentages", () => {
-    expect(formatPrice(104)).toBe("$104.00");
+  it("formats a price as a PLAIN number when the currency is unknown (no $/USD)", () => {
+    expect(formatPrice(104)).toBe("104.00");
+    expect(formatPrice(104, null)).toBe("104.00");
     expect(formatPercent(4)).toBe("+4.00%");
     expect(formatPercent(-3.5)).toBe("-3.50%");
+  });
+
+  it("uses the currency style only when a currency is known", () => {
+    expect(formatPrice(104, "USD")).toBe("$104.00");
+
+    const jpy = formatPrice(104, "JPY");
+    expect(jpy).toContain("¥");
+    expect(jpy).not.toContain("$");
+
+    // An invalid/unsupported code never invents a symbol: number + raw code.
+    expect(formatPrice(104, "US")).toBe("104.00 US");
+
+    // Non-finite stays an em dash even with a currency.
+    expect(formatPrice(null, "USD")).toBe("—");
   });
 
   it("derives direction and conveys it with symbol + text (not color alone)", () => {

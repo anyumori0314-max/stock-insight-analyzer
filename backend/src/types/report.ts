@@ -7,6 +7,8 @@
  * cache metadata, and any non-fatal warnings.
  */
 
+import type { StockRange } from "./stock";
+
 export type TrendVerdict = "uptrend" | "downtrend" | "sideways" | "unknown";
 export type MomentumVerdict = "overbought" | "oversold" | "neutral" | "unknown";
 export type RiskVerdict = "low" | "medium" | "high" | "unknown";
@@ -64,8 +66,14 @@ export interface CacheMetadata {
 
 export interface StockReport {
   ticker: string;
-  /** Logical window identifier (e.g. "100d"). */
-  range: string;
+  /**
+   * Which provider produced this report: "live" (Alpha Vantage) or "mock"
+   * (deterministic in-process fixtures). The service stamps it; the UI shows a
+   * notice for "mock" so development data is never mistaken for real prices.
+   */
+  source: "live" | "mock";
+  /** Logical window identifier. MVP supports only `"100d"`. */
+  range: StockRange;
   /** Reporting currency if known; null for `TIME_SERIES_DAILY`. */
   currency: string | null;
   timezone: string | null;

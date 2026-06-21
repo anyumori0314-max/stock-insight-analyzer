@@ -9,6 +9,7 @@ import type { StockReport } from "../src/types/report";
 // a clean 200, which the limiter converts to 429 once the budget is exhausted.
 const okReport: StockReport = {
   ticker: "AAPL",
+  source: "live",
   range: "100d",
   currency: null,
   timezone: "US/Eastern",

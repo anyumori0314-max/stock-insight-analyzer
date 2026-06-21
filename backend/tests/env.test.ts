@@ -33,6 +33,30 @@ describe("loadEnv — valid input", () => {
   it("accepts a numeric TRUST_PROXY hop count", () => {
     expect(loadEnv({ TRUST_PROXY: "2" }).TRUST_PROXY).toBe(2);
   });
+
+  it("defaults the cache TTL to 6 hours (21600s) and max entries to 100", () => {
+    const env = loadEnv({});
+    expect(env.STOCK_CACHE_TTL_SECONDS).toBe(21_600);
+    expect(env.STOCK_CACHE_MAX_ENTRIES).toBe(100);
+  });
+
+  it("accepts a custom cache TTL up to 24 hours", () => {
+    expect(loadEnv({ STOCK_CACHE_TTL_SECONDS: "3600" }).STOCK_CACHE_TTL_SECONDS).toBe(3600);
+    expect(loadEnv({ STOCK_CACHE_TTL_SECONDS: "86400" }).STOCK_CACHE_TTL_SECONDS).toBe(86_400);
+  });
+
+  it("defaults the data mode to live", () => {
+    expect(loadEnv({}).STOCK_DATA_MODE).toBe("live");
+  });
+
+  it("defaults the provider max points to 120 and accepts a custom value", () => {
+    expect(loadEnv({}).ALPHA_VANTAGE_MAX_POINTS).toBe(120);
+    expect(loadEnv({ ALPHA_VANTAGE_MAX_POINTS: "250" }).ALPHA_VANTAGE_MAX_POINTS).toBe(250);
+  });
+
+  it("accepts an explicit mock data mode outside production", () => {
+    expect(loadEnv({ STOCK_DATA_MODE: "mock" }).STOCK_DATA_MODE).toBe("mock");
+  });
 });
 
 describe("loadEnv — invalid input is rejected at startup", () => {
@@ -53,6 +77,34 @@ describe("loadEnv — invalid input is rejected at startup", () => {
     expect(() => loadEnv({ TRUST_PROXY: "true" })).toThrow(/Invalid environment variables/);
     expect(() => loadEnv({ TRUST_PROXY: "-1" })).toThrow(/Invalid environment variables/);
     expect(() => loadEnv({ TRUST_PROXY: "1.5" })).toThrow(/Invalid environment variables/);
+  });
+
+  it("rejects a zero / negative / oversized cache TTL", () => {
+    expect(() => loadEnv({ STOCK_CACHE_TTL_SECONDS: "0" })).toThrow(/Invalid environment variables/);
+    expect(() => loadEnv({ STOCK_CACHE_TTL_SECONDS: "-1" })).toThrow(/Invalid environment variables/);
+    expect(() => loadEnv({ STOCK_CACHE_TTL_SECONDS: "86401" })).toThrow(/Invalid environment variables/);
+    expect(() => loadEnv({ STOCK_CACHE_TTL_SECONDS: "1.5" })).toThrow(/Invalid environment variables/);
+  });
+
+  it("rejects a zero / negative cache max-entries", () => {
+    expect(() => loadEnv({ STOCK_CACHE_MAX_ENTRIES: "0" })).toThrow(/Invalid environment variables/);
+    expect(() => loadEnv({ STOCK_CACHE_MAX_ENTRIES: "-5" })).toThrow(/Invalid environment variables/);
+  });
+
+  it("rejects an unknown data mode", () => {
+    expect(() => loadEnv({ STOCK_DATA_MODE: "fake" })).toThrow(/Invalid environment variables/);
+  });
+
+  it("rejects a zero / negative / non-integer provider max points", () => {
+    expect(() => loadEnv({ ALPHA_VANTAGE_MAX_POINTS: "0" })).toThrow(/Invalid environment variables/);
+    expect(() => loadEnv({ ALPHA_VANTAGE_MAX_POINTS: "-10" })).toThrow(/Invalid environment variables/);
+    expect(() => loadEnv({ ALPHA_VANTAGE_MAX_POINTS: "1.5" })).toThrow(/Invalid environment variables/);
+  });
+
+  it("rejects mock data mode in production", () => {
+    expect(() => loadEnv({ NODE_ENV: "production", STOCK_DATA_MODE: "mock" })).toThrow(
+      /Invalid environment variables/
+    );
   });
 });
 

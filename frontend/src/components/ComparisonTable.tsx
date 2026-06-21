@@ -56,7 +56,25 @@ export function ComparisonTable({
               </button>
             );
 
-            if (!state || state.status === "loading") {
+            // No entry yet = the user has not selected this ticker, so it was
+            // never fetched. Show "未取得" rather than triggering a request.
+            if (!state) {
+              return (
+                <tr key={ticker} className={isActive ? "is-active" : undefined}>
+                  <td>
+                    <button type="button" className="row-link" onClick={() => onSelect(ticker)}>
+                      {ticker}
+                    </button>
+                  </td>
+                  <td colSpan={7} className="muted">
+                    未取得
+                  </td>
+                  <td>{removeButton}</td>
+                </tr>
+              );
+            }
+
+            if (state.status === "loading") {
               return (
                 <tr key={ticker} className={isActive ? "is-active" : undefined}>
                   <td>{ticker}</td>
@@ -69,11 +87,17 @@ export function ComparisonTable({
             }
 
             if (state.status === "error") {
+              // Keep rows terse: the full provider message (e.g. a rate-limit
+              // notice) is shown ONCE in the panel above, never repeated per row.
               return (
                 <tr key={ticker} className={isActive ? "is-active" : undefined}>
-                  <td>{ticker}</td>
+                  <td>
+                    <button type="button" className="row-link" onClick={() => onSelect(ticker)}>
+                      {ticker}
+                    </button>
+                  </td>
                   <td colSpan={7} className="state--error">
-                    {state.message}
+                    取得できませんでした
                   </td>
                   <td>{removeButton}</td>
                 </tr>
@@ -88,7 +112,7 @@ export function ComparisonTable({
                     {ticker}
                   </button>
                 </td>
-                <td>{formatPrice(metrics.currentPrice)}</td>
+                <td>{formatPrice(metrics.currentPrice, state.report.currency)}</td>
                 <td className={`value-${changeDirection(metrics.periodReturnPercent)}`}>
                   {formatPercent(metrics.periodReturnPercent)}
                 </td>

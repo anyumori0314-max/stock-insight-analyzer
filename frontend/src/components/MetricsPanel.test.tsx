@@ -9,10 +9,22 @@ describe("MetricsPanel", () => {
     const { metrics } = makeReport();
     render(<MetricsPanel metrics={metrics} currency={null} />);
 
-    expect(screen.getByText("$104.00")).toBeInTheDocument();
+    // currency=null -> plain number, no assumed $, and a "通貨不明" note.
+    expect(screen.getByText("104.00")).toBeInTheDocument();
+    expect(screen.queryByText("$104.00")).not.toBeInTheDocument();
+    expect(screen.getByText(/通貨不明/)).toBeInTheDocument();
     // Daily change conveys direction with an arrow glyph AND a text label.
     expect(screen.getByText(/▲/)).toBeInTheDocument();
     expect(screen.getAllByText("上昇").length).toBeGreaterThan(0);
+  });
+
+  it("uses the currency style and code label when a currency is known", () => {
+    const { metrics } = makeReport();
+    render(<MetricsPanel metrics={metrics} currency="USD" />);
+
+    expect(screen.getByText("$104.00")).toBeInTheDocument();
+    expect(screen.getByText(/（USD）/)).toBeInTheDocument();
+    expect(screen.queryByText(/通貨不明/)).not.toBeInTheDocument();
   });
 
   it("renders a downward change with the down glyph and label", () => {

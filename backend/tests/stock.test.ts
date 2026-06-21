@@ -10,6 +10,7 @@ import type { StockService } from "../src/services/stockService";
 function makeReport(ticker: string): StockReport {
   return {
     ticker,
+    source: "live",
     range: "100d",
     currency: null,
     timezone: "US/Eastern",

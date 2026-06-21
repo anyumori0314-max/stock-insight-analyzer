@@ -6,6 +6,16 @@
  * Vantage's string-keyed wire format.
  */
 
+/**
+ * The single window the MVP supports. `outputsize=compact` returns ~100 trading
+ * days, so the only logical range is `"100d"`. Kept as a literal (not `string`)
+ * so the type system rejects unsupported ranges like `"1y"` at compile time.
+ */
+export type StockRange = "100d";
+
+/** The default (and currently only) supported range. */
+export const SUPPORTED_RANGE: StockRange = "100d";
+
 /** A single day's OHLCV bar. All numeric, already parsed and validated. */
 export interface DailyBar {
   /** Trading day in ISO `YYYY-MM-DD` form. */
@@ -28,8 +38,8 @@ export interface DailyBar {
  */
 export interface StockTimeSeries {
   ticker: string;
-  /** Logical window identifier (e.g. "100d" for compact daily). */
-  range: string;
+  /** Logical window identifier. MVP supports only `"100d"` (compact daily). */
+  range: StockRange;
   /** Provider currency, if known. `TIME_SERIES_DAILY` does not report it -> null. */
   currency: string | null;
   /** Provider time zone label (e.g. "US/Eastern"), or null if absent. */

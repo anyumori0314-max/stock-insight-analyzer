@@ -37,7 +37,8 @@ function MetricCard({
 }
 
 export function MetricsPanel({ metrics, currency }: MetricsPanelProps) {
-  const currencyNote = currency ? `（${currency}）` : "（USD想定 / raw close）";
+  // No currency from TIME_SERIES_DAILY -> say so rather than implying USD.
+  const currencyNote = currency ? `（${currency}）` : "（通貨不明 / raw close）";
 
   const dcDir = changeDirection(metrics.dailyChange);
   const dailyChangeValue =
@@ -51,7 +52,7 @@ export function MetricsPanel({ metrics, currency }: MetricsPanelProps) {
 
   return (
     <div className="metrics-grid">
-      <MetricCard label={`現在値 ${currencyNote}`} value={formatPrice(metrics.currentPrice)} />
+      <MetricCard label={`現在値 ${currencyNote}`} value={formatPrice(metrics.currentPrice, currency)} />
       <MetricCard
         label="前日比"
         value={dailyChangeValue}
@@ -64,8 +65,8 @@ export function MetricsPanel({ metrics, currency }: MetricsPanelProps) {
         direction={prDir}
         srLabel={metrics.periodReturnPercent === null ? undefined : directionLabel(prDir)}
       />
-      <MetricCard label="移動平均 (20日)" value={formatPrice(metrics.sma20)} />
-      <MetricCard label="移動平均 (50日)" value={formatPrice(metrics.sma50)} />
+      <MetricCard label="移動平均 (20日)" value={formatPrice(metrics.sma20, currency)} />
+      <MetricCard label="移動平均 (50日)" value={formatPrice(metrics.sma50, currency)} />
       <MetricCard label="RSI (14日)" value={formatNumber(metrics.rsi14, 1)} />
       <MetricCard
         label="年率ボラティリティ"

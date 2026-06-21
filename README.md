@@ -39,10 +39,12 @@ npm.cmd run install:all      # Windows PowerShell
 | `PORT` | バックエンドのポート（1〜65535） | `3001` |
 | `TRUST_PROXY` | 信頼するリバースプロキシ hop 数（0〜10）。`0` は `X-Forwarded-For` を無視 | `0` |
 | `ALLOWED_ORIGINS` | 追加で許可する CORS オリジン（カンマ区切り）。本番以外は `http://localhost:5173` を常に許可 | 空 |
-| `ALPHA_VANTAGE_API_KEY` | Alpha Vantage の API キー。**バックエンドのみ**で使用 | 空 |
+| `STOCK_DATA_MODE` | データ取得元（`live` / `mock`）。`mock` は外部通信せず決定的なダミーデータを返す（本番では `mock` を起動時に拒否） | `live` |
+| `ALPHA_VANTAGE_API_KEY` | Alpha Vantage の API キー。**バックエンドのみ**で使用（`live` モード時のみ） | 空 |
 | `ALPHA_VANTAGE_TIMEOUT_MS` | 外部リクエストのタイムアウト（1000〜30000 ms） | `8000` |
+| `ALPHA_VANTAGE_MAX_POINTS` | Alpha Vantage レスポンスから処理する最大時系列件数（1〜10000 の整数）。超過は `PROVIDER_RESPONSE_INVALID`（黙って切り捨てない）。不正値・小数・範囲外は起動時に拒否 | `120` |
 | `STOCK_CACHE_MAX_ENTRIES` | キャッシュ最大件数（正整数）。LRU eviction | `100` |
-| `STOCK_CACHE_TTL_MS` | キャッシュ TTL（1000〜86400000 ms） | `300000` |
+| `STOCK_CACHE_TTL_SECONDS` | キャッシュ TTL（**秒**、1〜86400）。日次バーは引け後のみ更新されるため数時間で十分 | `21600`（6時間） |
 
 > **API キーの取り扱い**: キーは**バックエンドのプロセス内のみ**で参照され、API レスポンスにもフロントエンドのバンドルにも含まれません。フロントエンドには絶対に API キーを置かないでください。`.env` は `.gitignore` 済みですが、コミット前に `git status` で含まれないことを確認してください。
 
@@ -52,6 +54,17 @@ npm.cmd run install:all      # Windows PowerShell
 |--------|------|--------|
 | `VITE_API_BASE_URL` | 別ホストの API を使う場合のベース URL（dev は Vite プロキシで同一オリジン） | 空 |
 | `VITE_API_TIMEOUT_MS` | クライアント側リクエストのタイムアウト（ms） | `10000` |
+
+## API 消費を抑える設計（開発時の推奨）
+
+Alpha Vantage の無料枠（概ね 25 リクエスト/日）を浪費しないよう、次の方針で動作します。
+
+- **通常開発では `STOCK_DATA_MODE=mock` を推奨**します。外部通信せず決定的なダミーデータで UI・指標・チャートを確認できます（`.env.example` も既定で `mock`）。実 API の確認時のみ `STOCK_DATA_MODE=live` を明示し、`ALPHA_VANTAGE_API_KEY` を設定してください。`live` / `mock` の切り替えは**プロバイダ層**で行い、ルートやフロントエンドにモード判定を持ち込みません。`mock` レスポンスは画面に「開発用モックデータを表示しています。」と明示します。
+- **起動時は API 通信を行いません**。初期表示は「銘柄を選択すると株価データを取得します。」の案内のみで、リロードや React StrictMode の effect 二重実行でも外部通信は 0 回です。
+- **選択した 1 銘柄だけ取得**します。プリセット／タブ／個別追加の操作で対象 1 銘柄のみを取得し、比較表は**取得済み銘柄のみ値を表示**（未取得は「未取得」）。比較表が一括取得を起こすことはありません。
+- **API 制限時は自動再試行しません**。`PROVIDER_RATE_LIMITED` を受けても自動リトライ・タイマー・他銘柄への継続取得は行わず、共通エラーを画面上部に 1 件だけ表示します（比較表の各行は「取得できませんでした」のみ）。再試行はユーザーの明示操作のみで、処理中は再試行ボタンを無効化（連打不可）します。
+- **インメモリキャッシュは再起動で消えます**。`ticker:range` をキーに成功レポートのみを `STOCK_CACHE_TTL_SECONDS`（既定 6 時間）保持し、最大 `STOCK_CACHE_MAX_ENTRIES` 件で LRU eviction。API キーや提供元の生レスポンスは保存しません。SQLite/Redis などの永続キャッシュは使用しません。
+- **実 API テストは必要最小限**にとどめます（下記スモークテスト参照）。自動テストは外部通信しません。
 
 ## 起動・ビルド・型チェック
 
@@ -84,30 +97,40 @@ npm run test:frontend   # frontend（Vitest + React Testing Library, jsdom）
 ```jsonc
 {
   "ticker": "AAPL",
-  "range": "100d",
-  "currency": null,            // TIME_SERIES_DAILY は通貨を返さないため null
+  "source": "live",            // データ取得元（"live" = Alpha Vantage / "mock" = 開発用ダミー）。必須
+  "range": "100d",             // MVP は "100d" 固定
+  "currency": null,            // TIME_SERIES_DAILY は通貨を返さないため常に null
   "timezone": "US/Eastern",
   "lastRefreshed": "2026-06-19",
   "priceBasis": "close",       // raw close（分割・配当調整前）
   "series": [
-    { "date": "2026-06-18", "open": 0, "high": 0, "low": 0, "close": 0,
-      "adjustedClose": null, "volume": 0, "sma20": null, "sma50": null }
+    // 古い順（昇順）。直近約100営業日のうち末尾2件のみ抜粋
+    { "date": "2026-06-18", "open": 198.40, "high": 201.20, "low": 197.90, "close": 200.00,
+      "adjustedClose": null, "volume": 41250000, "sma20": 196.80, "sma50": 188.45 },
+    { "date": "2026-06-19", "open": 200.50, "high": 205.10, "low": 200.10, "close": 204.00,
+      "adjustedClose": null, "volume": 38900000, "sma20": 197.55, "sma50": 189.10 }
   ],
   "metrics": {
-    "currentPrice": 0, "dailyChange": null, "dailyChangePercent": null,
-    "periodReturnPercent": null, "sma20": null, "sma50": null, "rsi14": null,
-    "annualizedVolatilityPercent": null, "maxDrawdownPercent": null
+    "currentPrice": 204.00,        // 最新終値（series 末尾の close と一致）
+    "dailyChange": 4.00,           // 204.00 − 200.00
+    "dailyChangePercent": 2.00,    // (204.00 − 200.00) / 200.00 × 100
+    "periodReturnPercent": 15.40,
+    "sma20": 197.55, "sma50": 189.10, "rsi14": 61.20,
+    "annualizedVolatilityPercent": 24.80, "maxDrawdownPercent": -8.30
   },
   "analysis": {
     "trend": "uptrend", "momentum": "neutral", "risk": "low",
-    "score": 100, "comments": ["..."]
+    "score": 78, "comments": ["終値は20日・50日移動平均を上回り、上昇基調です。"]
   },
-  "warnings": ["..."],
-  "cache": { "hit": false, "expiresAt": "2026-06-19T00:05:00.000Z" },
-  "disclaimer": "..."
+  "warnings": [],
+  "cache": { "hit": false, "expiresAt": "2026-06-19T06:00:00.000Z" },
+  "disclaimer": "（免責事項の全文。投資助言ではありません…）"
 }
 ```
 
+> 上の `series` は表示の都合で末尾 2 件のみを抜粋しています（実際は直近約 100 営業日）。`sma20` / `sma50` などの指標は全期間から算出されます。
+
+- **source**: データ取得元を示す必須項目です（`"live"` = Alpha Vantage、`"mock"` = 開発用ダミー）。プロバイダ層で切り替え、レスポンスに常に含まれます。
 - **priceBasis / adjustedClose**: 無料の `TIME_SERIES_DAILY` には調整後終値が無いため、`priceBasis` は常に `"close"`、`adjustedClose` は常に `null` です（株式分割・配当**調整前**の終値）。
 - **数値の有限性**: すべての公開数値は有限（finite）であることを保証し、計算不能な場合は `null` を返します（NaN/Infinity を返しません）。フロントエンドも同じ zod 契約で検証します。
 - **warnings**: 致命的でない注記（履歴不足・重複日付の調整など）。
@@ -148,7 +171,7 @@ npm run test:frontend   # frontend（Vitest + React Testing Library, jsdom）
 
 ### キャッシュと外部 API
 
-- **サーバー側 LRU キャッシュ**: `ticker:range` をキーに分析済みレポートを `STOCK_CACHE_TTL_MS` の間保持。最大 `STOCK_CACHE_MAX_ENTRIES` 件で、超過時は期限切れ → LRU の順に 1 件 eviction。成功結果のみキャッシュします。
+- **サーバー側 LRU キャッシュ**: `ticker:range` をキーに分析済みレポートを `STOCK_CACHE_TTL_SECONDS`（既定 6 時間）の間保持。最大 `STOCK_CACHE_MAX_ENTRIES` 件で、超過時は期限切れ → LRU の順に 1 件 eviction。成功結果のみキャッシュし、再起動で消えるインメモリ方式です。
 - **in-flight 重複排除**: 同一キーへの並行リクエストは 1 回の提供元呼び出しへ集約。成功・失敗いずれも完了後にクリアし、失敗はキャッシュせず再試行可能です。
 - **タイムアウト**: 外部呼び出しは `ALPHA_VANTAGE_TIMEOUT_MS` で打ち切り、`PROVIDER_TIMEOUT` を返します。フロントエンドにも `VITE_API_TIMEOUT_MS` の独立タイムアウトがあります。
 - **提供元の制限**: Alpha Vantage 無料枠は概ね **25 リクエスト/日**です。キャッシュと重複排除でこの枠を節約しています。

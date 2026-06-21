@@ -119,6 +119,25 @@
 - [x] アクセシビリティ（tablist/tab/tabpanel・キーボード操作・role=status/alert・チャート読み上げ要約・フォーカス移動）
 - [x] README / TASKS の実装整合、`.claude/` の Git 除外
 
+### Phase 2 追補（Provider・API 契約の完成）
+
+- [x] 公開エラーコードの一元管理レジストリ（`ERROR_CATALOG`：HTTP ステータス / 公開メッセージ / retry 可否）と `errorFor()` ファクトリ
+- [x] HTTP ステータス分類の補完（400→`PROVIDER_RESPONSE_INVALID`、408/504→`PROVIDER_TIMEOUT`、429→`PROVIDER_RATE_LIMITED`、401/403→`API_KEY_INVALID`、404/500/502/503/未知→`PROVIDER_UNAVAILABLE`）
+- [x] Content-Type 判定と非 JSON 応答の安全処理（text/html・text/plain・Content-Type なし・空 body・壊れた JSON を `PROVIDER_RESPONSE_INVALID` へ。body 原文・先頭文字・stack 非公開）
+- [x] Provider advisory の意味的分類関数 `classifyProviderMessage()`（API キー/entitlement・レート制限・銘柄・障害を内容で判定、優先順位＋channel フォールバック。原文は内部分類のみで非公開）
+- [x] 成功 payload の cross-field 検証強化（symbol 一致は trim/uppercase 後、実在日付、OHLC 整合、volume は `Number.isSafeInteger`、不正行は全体拒否＝サイレント補正なし）
+- [x] 最大処理件数の環境変数化（`ALPHA_VANTAGE_MAX_POINTS`、既定 120、zod 正整数、超過は `PROVIDER_RESPONSE_INVALID`・slice しない）
+- [x] `priceBasis="close"` / `adjustedClose=null` の固定（`TIME_SERIES_DAILY` のまま、調整後終値は非取得）
+- [x] StockReport 公開契約に `source`（live/mock）を含む全必須項目を整備（backend 型 / backend zod / frontend zod の一致）
+- [x] `currency=null` 方針（日次 payload だけで通貨を断定しない）と `range` 固定（MVP は `100d`、cache key に含む）の明示
+- [x] warnings の重複排除と決定的順序
+- [x] cache metadata（`hit`/`expiresAt`）の ISO 8601 厳格化、毎回新オブジェクト生成でキャッシュ実体を非破壊
+- [x] 前日比 `dailyChange` / `dailyChangePercent`（close 基準・2 件未満/前日 0 は null・有限値保証）
+- [x] backend 公開レスポンス schema を返却直前に検証（`assertPublicReport`、失敗は安全な `PROVIDER_RESPONSE_INVALID` へ・内部詳細は非公開）
+- [x] Provider 生メッセージ / URL / API キー / stack / ローカルパスの非公開を再確認（mock fetch のみでテスト）
+
+> 注: 上記は Phase 2 の Provider・API 契約部分の補完。数値安全性の網羅・frontend ランタイム検証の全面強化・スコア/免責の見直し・Phase 7 以降は対象外（未完了のまま）。
+
 ## Phase 7: テスト・セキュリティ
 
 - [ ] フロントエンドコンポーネントテスト
