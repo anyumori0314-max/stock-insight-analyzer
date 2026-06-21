@@ -24,15 +24,16 @@ describe("Error responses", () => {
     expect(res.body.error).not.toHaveProperty("stack");
   });
 
-  it("keeps the 501 contract clean (no details leaked outside development)", async () => {
-    // A valid ticker returns 501 (not 500). This asserts the 501 body is the
-    // unified shape with no `details` outside development. The genuine 500 path
-    // for unexpected (non-ApiError) errors is covered in errorHandler.test.ts.
+  it("keeps the API-key-missing contract clean (no details leaked outside development)", async () => {
+    // With no API key configured (the default test env), a valid ticker yields
+    // a unified 503 API_KEY_MISSING body with no `details` outside development.
+    // The genuine 500 path for unexpected (non-ApiError) errors is covered in
+    // errorHandler.test.ts.
     const app = buildTestApp();
     const res = await request(app).get("/api/stock/AAPL");
 
-    expect(res.status).toBe(501);
-    expect(res.body.error.code).toBe("NOT_IMPLEMENTED");
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe("API_KEY_MISSING");
     expect(res.body.error).not.toHaveProperty("details"); // stripped outside dev
   });
 });

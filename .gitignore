@@ -19,3 +19,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Local, per-developer Claude Code settings (personal permissions etc.)
+.claude/

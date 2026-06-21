@@ -7,7 +7,8 @@ import { createErrorHandler } from "./middleware/errorHandler";
 import { notFoundHandler } from "./middleware/notFoundHandler";
 import { createLimiter } from "./middleware/rateLimiter";
 import { healthRouter } from "./routes/health";
-import { stockRouter } from "./routes/stock";
+import { createStockRouter } from "./routes/stock";
+import { createStockService, type StockService } from "./services/stockService";
 import { ApiError } from "./types/errors";
 
 const DEFAULT_DEV_ORIGIN = "http://localhost:5173";
@@ -25,6 +26,8 @@ export interface CreateAppOptions {
   env: Env;
   /** Overrides the default rate-limit configuration (used by tests). */
   rateLimit?: RateLimitOptions;
+  /** Injects a pre-built stock service (tests use a fake client / no network). */
+  stockService?: StockService;
 }
 
 /**
@@ -60,6 +63,20 @@ export function createApp(options: CreateAppOptions): Express {
   const isDevelopment = env.NODE_ENV === "development";
   const allowedOrigins = resolveAllowedOrigins(env);
   const rateLimitConfig = resolveRateLimit(options);
+
+  // Build the stock service from the configured API key unless a test injects
+  // one. A missing key does not block startup — requests then surface an
+  // `API_KEY_MISSING` error instead.
+  const stockService =
+    options.stockService ??
+    createStockService({
+      apiKey: env.ALPHA_VANTAGE_API_KEY,
+      dataMode: env.STOCK_DATA_MODE,
+      timeoutMs: env.ALPHA_VANTAGE_TIMEOUT_MS,
+      maxPoints: env.ALPHA_VANTAGE_MAX_POINTS,
+      cacheTtlMs: env.STOCK_CACHE_TTL_SECONDS * 1000,
+      cacheMaxEntries: env.STOCK_CACHE_MAX_ENTRIES,
+    });
 
   const app = express();
   app.disable("x-powered-by");
@@ -133,7 +150,7 @@ export function createApp(options: CreateAppOptions): Express {
   app.use(express.json({ limit: "10kb" }));
 
   // 6. Stricter limiter for stock routes.
-  app.use("/api/stock", stockLimiter, stockRouter);
+  app.use("/api/stock", stockLimiter, createStockRouter(stockService));
 
   // 7 & 8. Unified 404 + error contract.
   app.use(notFoundHandler);

@@ -55,49 +55,88 @@
 
 ## Phase 2: Alpha Vantage 連携
 
-- [ ] Alpha Vantage API クライアントの作成
-- [ ] 日次株価データ（TIME_SERIES_DAILY）の取得
-- [ ] API レスポンスの型定義と検証
-- [ ] API レート制限対策（サーバー側キャッシュ）
-- [ ] タイムアウト処理
-- [ ] エラー時のフォールバック
-- [ ] Alpha Vantage モジュールのテスト（モック使用）
+- [x] Alpha Vantage API クライアントの作成
+- [x] 日次株価データ（TIME_SERIES_DAILY）の取得
+- [x] API レスポンスの型定義と検証
+- [x] API レート制限対策（サーバー側キャッシュ）
+- [x] タイムアウト処理
+- [x] エラー時のフォールバック
+- [x] Alpha Vantage モジュールのテスト（モック使用）
 
 ## Phase 3: フロントエンド UI 基盤
 
-- [ ] グローバル CSS / デザイントークンの設定
-- [ ] レイアウトコンポーネント（Header, Sidebar, Main）の実装
-- [ ] FANG+ プリセット銘柄の選択 UI
-- [ ] 個別銘柄のティッカー入力 UI（クライアント側バリデーション）
-- [ ] useStockData hook（API 通信 + ローディング + エラー）の実装
-- [ ] 共有型定義（types/stock.ts）の作成
+- [x] グローバル CSS / デザイントークンの設定
+- [x] レイアウトコンポーネント（Header, Sidebar, Main）の実装
+- [x] FANG+ プリセット銘柄の選択 UI
+- [x] 個別銘柄のティッカー入力 UI（クライアント側バリデーション）
+- [x] useStockData hook（API 通信 + ローディング + エラー）の実装
+- [x] 共有型定義（types/stock.ts）の作成
 
 ## Phase 4: テクニカル指標の計算
 
-- [ ] 現在価格・期間騰落率の計算
-- [ ] 移動平均（SMA20, SMA50）の計算
-- [ ] RSI（14日）の計算
-- [ ] ボラティリティ（年率換算）の計算
-- [ ] 最大下落率（Maximum Drawdown）の計算
-- [ ] 各指標の計算ロジックのユニットテスト
+- [x] 現在価格・期間騰落率の計算
+- [x] 移動平均（SMA20, SMA50）の計算
+- [x] RSI（14日）の計算
+- [x] ボラティリティ（年率換算）の計算
+- [x] 最大下落率（Maximum Drawdown）の計算
+- [x] 各指標の計算ロジックのユニットテスト
 
 ## Phase 5: チャート・比較表示
 
-- [ ] チャートライブラリ（Recharts）の導入
-- [ ] 株価チャート（終値）の表示
-- [ ] 20日・50日移動平均線の表示
-- [ ] 複数銘柄の比較テーブル表示
-- [ ] レスポンシブ対応
+- [x] チャートライブラリ（Recharts）の導入
+- [x] 株価チャート（終値）の表示
+- [x] 20日・50日移動平均線の表示
+- [x] 複数銘柄の比較テーブル表示
+- [x] レスポンシブ対応
 
 ## Phase 6: 分析コメント・免責表示
 
-- [ ] トレンド判定（移動平均との位置関係）
-- [ ] 過熱感判定（RSI 基準）
-- [ ] リスク判定（ボラティリティ・最大下落率基準）
-- [ ] 総合評価スコアの算出
-- [ ] ルールベースの分析コメント生成
-- [ ] 免責事項コンポーネント（フッター常時表示）
-- [ ] 投資助言に見える表現の排除チェック
+- [x] トレンド判定（移動平均との位置関係）
+- [x] 過熱感判定（RSI 基準）
+- [x] リスク判定（ボラティリティ・最大下落率基準）
+- [x] 総合評価スコアの算出
+- [x] ルールベースの分析コメント生成
+- [x] 免責事項コンポーネント（フッター常時表示）
+- [x] 投資助言に見える表現の排除チェック
+
+### Phase 2〜6 追補（Codex 総合レビュー対応）
+
+- [x] キャッシュの最大件数（`STOCK_CACHE_MAX_ENTRIES`）と LRU eviction（期限切れ優先）
+- [x] 同一キーへの並行リクエストの in-flight 重複排除（provider 1 回・失敗時 cleanup・再試行可）
+- [x] キャッシュキーを `ticker:range` 化／成功時のみキャッシュ
+- [x] API レスポンス契約の完成（`range`/`series`/`warnings`/`cache`/`priceBasis`/`currency`/`adjustedClose`、zod 契約スキーマ）
+- [x] 前日比（`dailyChange`）・前日比率（`dailyChangePercent`）の実装と UI 表示（記号＋テキスト）
+- [x] 全公開数値の有限値保証（NaN/Infinity を null 化、JSON 非依存）
+- [x] Alpha Vantage レスポンス分類の強化（HTTP status / 非 JSON / 各 API エラーキー個別判定）
+- [x] provider cross-field 検証（symbol 一致・日付実在・OHLC 整合・volume 整数・件数上限）
+- [x] エラーコード統一（`API_KEY_MISSING` / `API_KEY_INVALID` / `PROVIDER_RATE_LIMITED` / `PROVIDER_TIMEOUT` / `PROVIDER_UNAVAILABLE` / `PROVIDER_RESPONSE_INVALID` / `SYMBOL_NOT_FOUND` / `INSUFFICIENT_DATA`）
+- [x] タイムアウトの実動作テスト（fake timer・AbortSignal・timer cleanup）と `ALPHA_VANTAGE_TIMEOUT_MS`
+- [x] frontend API クライアントの堅牢化（runtime zod 検証・timeout・stale response 防止・abort 無視）
+- [x] frontend テスト基盤（Vitest + React Testing Library + jsdom、外部通信なし）
+- [x] 参考スコアの誤認防止（「テクニカル状態スコア」へ改称・注記・0〜100 到達）
+- [x] 免責事項の完全化（README / API / UI の一貫化、raw close 明記）
+- [x] FANG+ 参考プリセット表記（公式構成を保証しない旨・出典メタ）
+- [x] アクセシビリティ（tablist/tab/tabpanel・キーボード操作・role=status/alert・チャート読み上げ要約・フォーカス移動）
+- [x] README / TASKS の実装整合、`.claude/` の Git 除外
+
+### Phase 2 追補（Provider・API 契約の完成）
+
+- [x] 公開エラーコードの一元管理レジストリ（`ERROR_CATALOG`：HTTP ステータス / 公開メッセージ / retry 可否）と `errorFor()` ファクトリ
+- [x] HTTP ステータス分類の補完（400→`PROVIDER_RESPONSE_INVALID`、408/504→`PROVIDER_TIMEOUT`、429→`PROVIDER_RATE_LIMITED`、401/403→`API_KEY_INVALID`、404/500/502/503/未知→`PROVIDER_UNAVAILABLE`）
+- [x] Content-Type 判定と非 JSON 応答の安全処理（text/html・text/plain・Content-Type なし・空 body・壊れた JSON を `PROVIDER_RESPONSE_INVALID` へ。body 原文・先頭文字・stack 非公開）
+- [x] Provider advisory の意味的分類関数 `classifyProviderMessage()`（API キー/entitlement・レート制限・銘柄・障害を内容で判定、優先順位＋channel フォールバック。原文は内部分類のみで非公開）
+- [x] 成功 payload の cross-field 検証強化（symbol 一致は trim/uppercase 後、実在日付、OHLC 整合、volume は `Number.isSafeInteger`、不正行は全体拒否＝サイレント補正なし）
+- [x] 最大処理件数の環境変数化（`ALPHA_VANTAGE_MAX_POINTS`、既定 120、zod 正整数、超過は `PROVIDER_RESPONSE_INVALID`・slice しない）
+- [x] `priceBasis="close"` / `adjustedClose=null` の固定（`TIME_SERIES_DAILY` のまま、調整後終値は非取得）
+- [x] StockReport 公開契約に `source`（live/mock）を含む全必須項目を整備（backend 型 / backend zod / frontend zod の一致）
+- [x] `currency=null` 方針（日次 payload だけで通貨を断定しない）と `range` 固定（MVP は `100d`、cache key に含む）の明示
+- [x] warnings の重複排除と決定的順序
+- [x] cache metadata（`hit`/`expiresAt`）の ISO 8601 厳格化、毎回新オブジェクト生成でキャッシュ実体を非破壊
+- [x] 前日比 `dailyChange` / `dailyChangePercent`（close 基準・2 件未満/前日 0 は null・有限値保証）
+- [x] backend 公開レスポンス schema を返却直前に検証（`assertPublicReport`、失敗は安全な `PROVIDER_RESPONSE_INVALID` へ・内部詳細は非公開）
+- [x] Provider 生メッセージ / URL / API キー / stack / ローカルパスの非公開を再確認（mock fetch のみでテスト）
+
+> 注: 上記は Phase 2 の Provider・API 契約部分の補完。数値安全性の網羅・frontend ランタイム検証の全面強化・スコア/免責の見直し・Phase 7 以降は対象外（未完了のまま）。
 
 ## Phase 7: テスト・セキュリティ
 

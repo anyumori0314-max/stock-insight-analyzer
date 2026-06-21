@@ -1,11 +1,14 @@
 import { createApp, type RateLimitOptions } from "../src/app";
 import { loadEnv } from "../src/config/env";
+import type { StockService } from "../src/services/stockService";
 
 interface BuildTestAppOptions {
   /** Extra environment overrides merged on top of NODE_ENV=test. */
   env?: NodeJS.ProcessEnv;
   /** Inject a specific rate-limit configuration (e.g. to trigger 429). */
   rateLimit?: RateLimitOptions;
+  /** Inject a fake stock service so route tests need no network / API key. */
+  stockService?: StockService;
 }
 
 /**
@@ -14,5 +17,9 @@ interface BuildTestAppOptions {
  */
 export function buildTestApp(options: BuildTestAppOptions = {}) {
   const env = loadEnv({ NODE_ENV: "test", ...options.env });
-  return createApp({ env, rateLimit: options.rateLimit });
+  return createApp({
+    env,
+    rateLimit: options.rateLimit,
+    stockService: options.stockService,
+  });
 }

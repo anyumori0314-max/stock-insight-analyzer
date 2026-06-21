@@ -1,28 +1,72 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildTestApp } from "./helpers";
 import { tickerSchema } from "../src/schemas/stock";
+import { stockReportSchema } from "../src/schemas/report";
+import type { StockReport } from "../src/types/report";
+import type { StockService } from "../src/services/stockService";
+
+/** Minimal contract-valid report stub. */
+function makeReport(ticker: string): StockReport {
+  return {
+    ticker,
+    source: "live",
+    range: "100d",
+    currency: null,
+    timezone: "US/Eastern",
+    lastRefreshed: "2026-06-19",
+    priceBasis: "close",
+    series: [
+      { date: "2026-06-19", open: 100, high: 105, low: 99, close: 104, adjustedClose: null, volume: 1000, sma20: null, sma50: null },
+    ],
+    metrics: {
+      currentPrice: 104,
+      dailyChange: null,
+      dailyChangePercent: null,
+      periodReturnPercent: null,
+      sma20: null,
+      sma50: null,
+      rsi14: null,
+      annualizedVolatilityPercent: null,
+      maxDrawdownPercent: null,
+    },
+    analysis: { trend: "unknown", momentum: "unknown", risk: "unknown", score: null, comments: [] },
+    warnings: [],
+    cache: { hit: false, expiresAt: "2026-06-19T00:05:00.000Z" },
+    disclaimer: "参考情報です。",
+  };
+}
 
 describe("GET /api/stock/:ticker", () => {
-  it("returns 501 NOT_IMPLEMENTED for a valid ticker (no external call)", async () => {
+  it("returns 503 API_KEY_MISSING when no API key / service is configured", async () => {
     const app = buildTestApp();
     const res = await request(app).get("/api/stock/AAPL");
 
-    expect(res.status).toBe(501);
-    expect(res.body).toEqual({
-      error: {
-        code: "NOT_IMPLEMENTED",
-        message: "Stock data integration is not available yet.",
-      },
-    });
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe("API_KEY_MISSING");
   });
 
-  it("accepts lowercase tickers (normalized, not rejected) -> 501", async () => {
-    const app = buildTestApp();
+  it("returns 200 with a contract-valid report (service injected)", async () => {
+    const getReport = vi.fn(async (ticker: string) => makeReport(ticker));
+    const app = buildTestApp({ stockService: { getReport } });
+
+    const res = await request(app).get("/api/stock/AAPL");
+
+    expect(res.status).toBe(200);
+    expect(res.body.ticker).toBe("AAPL");
+    expect(res.body.metrics.currentPrice).toBe(104);
+    expect(stockReportSchema.safeParse(res.body).success).toBe(true);
+    expect(getReport).toHaveBeenCalledWith("AAPL");
+  });
+
+  it("normalizes a lowercase ticker before calling the service", async () => {
+    const getReport = vi.fn(async (ticker: string) => makeReport(ticker));
+    const app = buildTestApp({ stockService: { getReport } });
+
     const res = await request(app).get("/api/stock/aapl");
 
-    expect(res.status).toBe(501);
-    expect(res.body.error.code).toBe("NOT_IMPLEMENTED");
+    expect(res.status).toBe(200);
+    expect(getReport).toHaveBeenCalledWith("AAPL");
   });
 
   it("rejects empty / whitespace ticker with 400 INVALID_TICKER", async () => {
@@ -51,11 +95,6 @@ describe("GET /api/stock/:ticker", () => {
 
   it("rejects path-traversal-like input (never served as a ticker)", async () => {
     const app = buildTestApp();
-
-    // Traversal-style inputs must always be rejected with a unified error body
-    // and never reach the handler as a ticker (i.e. never 200/501). Rejection
-    // may happen at the router layer (404, the path is normalized away) or at
-    // the schema layer (400) — both are safe and return unified JSON.
     const cases = [
       "/api/stock/%2e%2e", // ".."
       "/api/stock/%2e%2e%2f%2e%2e%2fetc", // "../../etc"
@@ -74,12 +113,12 @@ describe("tickerSchema — accepted forms (normalized to uppercase)", () => {
   const accepted: Array<[string, string]> = [
     ["AAPL", "AAPL"],
     ["aapl", "AAPL"],
-    ["  aapl ", "AAPL"], // trimmed
+    ["  aapl ", "AAPL"],
     ["BRK.B", "BRK.B"],
     ["brk.b", "BRK.B"],
     ["BRK-B", "BRK-B"],
     ["BF.A", "BF.A"],
-    ["ABCDEFGHIJ", "ABCDEFGHIJ"], // exactly 10 allowed characters
+    ["ABCDEFGHIJ", "ABCDEFGHIJ"],
   ];
 
   it.each(accepted)("accepts %j -> %j", (input, expected) => {
@@ -114,8 +153,6 @@ describe("tickerSchema — rejected forms", () => {
   });
 
   it("rejects Unicode look-alikes that would fold to ASCII when uppercased", () => {
-    // Guards the validation-order fix: the ASCII allow-list is applied BEFORE
-    // uppercasing, so these never sneak through as S / I.
     expect("ſ".toUpperCase()).toBe("S");
     expect(tickerSchema.safeParse("ſ").success).toBe(false);
     expect(tickerSchema.safeParse("ı").success).toBe(false);
