@@ -1,38 +1,40 @@
 import { Router } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
-import { tickerSchema } from "../schemas/stock";
-import { ApiError } from "../types/errors";
 
-export const stockRouter = Router();
+import { tickerSchema } from "../schemas/stock";
+import type { StockService } from "../services/stockService";
+import { ApiError } from "../types/errors";
+import { asyncHandler } from "../utils/asyncHandler";
 
 /**
- * GET /api/stock/:ticker
+ * Builds the `/api/stock` router around an injected {@link StockService}.
  *
- * Phase 1: validates and normalizes the ticker, then responds with 501.
- * Alpha Vantage integration arrives in Phase 2 — no external call is made here.
+ * GET /api/stock/:ticker
+ *   1. Validates and normalizes the ticker (ASCII allow-list, uppercased).
+ *   2. Delegates to the service, which serves from cache or fetches + analyzes
+ *      the Alpha Vantage daily series.
+ * All failure modes are normalized to the unified `ApiError` contract upstream.
  */
-stockRouter.get(
-  "/:ticker",
-  asyncHandler(async (req, res) => {
-    void res; // response is produced by the error handler in Phase 1
-    const result = tickerSchema.safeParse(req.params.ticker);
+export function createStockRouter(service: StockService): Router {
+  const router = Router();
 
-    if (!result.success) {
-      throw new ApiError(
-        400,
-        "INVALID_TICKER",
-        "The ticker format is invalid.",
-        result.error.issues.map((issue) => issue.message)
-      );
-    }
+  router.get(
+    "/:ticker",
+    asyncHandler(async (req, res) => {
+      const result = tickerSchema.safeParse(req.params.ticker);
 
-    const ticker = result.data;
+      if (!result.success) {
+        throw new ApiError(
+          400,
+          "INVALID_TICKER",
+          "The ticker format is invalid.",
+          result.error.issues.map((issue) => issue.message)
+        );
+      }
 
-    throw new ApiError(
-      501,
-      "NOT_IMPLEMENTED",
-      "Stock data integration is not available yet.",
-      { ticker }
-    );
-  })
-);
+      const report = await service.getReport(result.data);
+      res.json(report);
+    })
+  );
+
+  return router;
+}

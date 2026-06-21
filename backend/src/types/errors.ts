@@ -17,7 +17,26 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "RATE_LIMITED"
   | "INTERNAL_SERVER_ERROR"
-  | "NOT_IMPLEMENTED";
+  | "NOT_IMPLEMENTED"
+  // --- Phase 2: market-data provider (Alpha Vantage) integration --------------
+  // No API key is configured on the backend, so no outbound call is made.
+  | "API_KEY_MISSING"
+  // The provider rejected our key (auth failure). The key itself is never
+  // echoed back to the client.
+  | "API_KEY_INVALID"
+  // The provider's own rate limit was hit (its per-minute / daily quota).
+  | "PROVIDER_RATE_LIMITED"
+  // The outbound request exceeded our timeout budget.
+  | "PROVIDER_TIMEOUT"
+  // The provider was unreachable / returned a transport-level failure.
+  | "PROVIDER_UNAVAILABLE"
+  // The provider responded but the payload was unusable (non-JSON, wrong shape,
+  // or failed cross-field validation). Raw bodies are never exposed.
+  | "PROVIDER_RESPONSE_INVALID"
+  // The ticker was valid in shape but the provider has no data for it.
+  | "SYMBOL_NOT_FOUND"
+  // Data was returned but there were too few usable points to analyze.
+  | "INSUFFICIENT_DATA";
 
 export interface ErrorResponseBody {
   error: {

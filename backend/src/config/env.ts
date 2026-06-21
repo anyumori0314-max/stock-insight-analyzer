@@ -19,8 +19,28 @@ const envSchema = z.object({
   // hops. We never use Express' unconditional `true`, which would blindly
   // trust a forgeable `X-Forwarded-For`. Invalid values fail startup below.
   TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
-  // Optional in Phase 1. Required from Phase 2 when Alpha Vantage is wired up.
+  // Optional at startup so the app boots without a key; a request without it
+  // surfaces an `API_KEY_MISSING` error instead of crashing. The key is only
+  // ever read on the backend and never sent to the client.
   ALPHA_VANTAGE_API_KEY: optionalSecret,
+  // Per-request timeout (ms) for outbound Alpha Vantage calls.
+  ALPHA_VANTAGE_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(30000)
+    .default(8000),
+  // Maximum number of (ticker:range) reports kept in the in-memory cache.
+  // Bounds memory and enables LRU eviction. Must be a positive integer.
+  STOCK_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().max(100000).default(100),
+  // Cache lifetime (ms) for a stock report. Daily bars only change after the
+  // close, so a few minutes shields the provider's scarce free-tier quota.
+  STOCK_CACHE_TTL_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(86_400_000)
+    .default(5 * 60 * 1000),
   // Comma-separated list of additional allowed CORS origins.
   ALLOWED_ORIGINS: z
     .string()

@@ -55,49 +55,69 @@
 
 ## Phase 2: Alpha Vantage 連携
 
-- [ ] Alpha Vantage API クライアントの作成
-- [ ] 日次株価データ（TIME_SERIES_DAILY）の取得
-- [ ] API レスポンスの型定義と検証
-- [ ] API レート制限対策（サーバー側キャッシュ）
-- [ ] タイムアウト処理
-- [ ] エラー時のフォールバック
-- [ ] Alpha Vantage モジュールのテスト（モック使用）
+- [x] Alpha Vantage API クライアントの作成
+- [x] 日次株価データ（TIME_SERIES_DAILY）の取得
+- [x] API レスポンスの型定義と検証
+- [x] API レート制限対策（サーバー側キャッシュ）
+- [x] タイムアウト処理
+- [x] エラー時のフォールバック
+- [x] Alpha Vantage モジュールのテスト（モック使用）
 
 ## Phase 3: フロントエンド UI 基盤
 
-- [ ] グローバル CSS / デザイントークンの設定
-- [ ] レイアウトコンポーネント（Header, Sidebar, Main）の実装
-- [ ] FANG+ プリセット銘柄の選択 UI
-- [ ] 個別銘柄のティッカー入力 UI（クライアント側バリデーション）
-- [ ] useStockData hook（API 通信 + ローディング + エラー）の実装
-- [ ] 共有型定義（types/stock.ts）の作成
+- [x] グローバル CSS / デザイントークンの設定
+- [x] レイアウトコンポーネント（Header, Sidebar, Main）の実装
+- [x] FANG+ プリセット銘柄の選択 UI
+- [x] 個別銘柄のティッカー入力 UI（クライアント側バリデーション）
+- [x] useStockData hook（API 通信 + ローディング + エラー）の実装
+- [x] 共有型定義（types/stock.ts）の作成
 
 ## Phase 4: テクニカル指標の計算
 
-- [ ] 現在価格・期間騰落率の計算
-- [ ] 移動平均（SMA20, SMA50）の計算
-- [ ] RSI（14日）の計算
-- [ ] ボラティリティ（年率換算）の計算
-- [ ] 最大下落率（Maximum Drawdown）の計算
-- [ ] 各指標の計算ロジックのユニットテスト
+- [x] 現在価格・期間騰落率の計算
+- [x] 移動平均（SMA20, SMA50）の計算
+- [x] RSI（14日）の計算
+- [x] ボラティリティ（年率換算）の計算
+- [x] 最大下落率（Maximum Drawdown）の計算
+- [x] 各指標の計算ロジックのユニットテスト
 
 ## Phase 5: チャート・比較表示
 
-- [ ] チャートライブラリ（Recharts）の導入
-- [ ] 株価チャート（終値）の表示
-- [ ] 20日・50日移動平均線の表示
-- [ ] 複数銘柄の比較テーブル表示
-- [ ] レスポンシブ対応
+- [x] チャートライブラリ（Recharts）の導入
+- [x] 株価チャート（終値）の表示
+- [x] 20日・50日移動平均線の表示
+- [x] 複数銘柄の比較テーブル表示
+- [x] レスポンシブ対応
 
 ## Phase 6: 分析コメント・免責表示
 
-- [ ] トレンド判定（移動平均との位置関係）
-- [ ] 過熱感判定（RSI 基準）
-- [ ] リスク判定（ボラティリティ・最大下落率基準）
-- [ ] 総合評価スコアの算出
-- [ ] ルールベースの分析コメント生成
-- [ ] 免責事項コンポーネント（フッター常時表示）
-- [ ] 投資助言に見える表現の排除チェック
+- [x] トレンド判定（移動平均との位置関係）
+- [x] 過熱感判定（RSI 基準）
+- [x] リスク判定（ボラティリティ・最大下落率基準）
+- [x] 総合評価スコアの算出
+- [x] ルールベースの分析コメント生成
+- [x] 免責事項コンポーネント（フッター常時表示）
+- [x] 投資助言に見える表現の排除チェック
+
+### Phase 2〜6 追補（Codex 総合レビュー対応）
+
+- [x] キャッシュの最大件数（`STOCK_CACHE_MAX_ENTRIES`）と LRU eviction（期限切れ優先）
+- [x] 同一キーへの並行リクエストの in-flight 重複排除（provider 1 回・失敗時 cleanup・再試行可）
+- [x] キャッシュキーを `ticker:range` 化／成功時のみキャッシュ
+- [x] API レスポンス契約の完成（`range`/`series`/`warnings`/`cache`/`priceBasis`/`currency`/`adjustedClose`、zod 契約スキーマ）
+- [x] 前日比（`dailyChange`）・前日比率（`dailyChangePercent`）の実装と UI 表示（記号＋テキスト）
+- [x] 全公開数値の有限値保証（NaN/Infinity を null 化、JSON 非依存）
+- [x] Alpha Vantage レスポンス分類の強化（HTTP status / 非 JSON / 各 API エラーキー個別判定）
+- [x] provider cross-field 検証（symbol 一致・日付実在・OHLC 整合・volume 整数・件数上限）
+- [x] エラーコード統一（`API_KEY_MISSING` / `API_KEY_INVALID` / `PROVIDER_RATE_LIMITED` / `PROVIDER_TIMEOUT` / `PROVIDER_UNAVAILABLE` / `PROVIDER_RESPONSE_INVALID` / `SYMBOL_NOT_FOUND` / `INSUFFICIENT_DATA`）
+- [x] タイムアウトの実動作テスト（fake timer・AbortSignal・timer cleanup）と `ALPHA_VANTAGE_TIMEOUT_MS`
+- [x] frontend API クライアントの堅牢化（runtime zod 検証・timeout・stale response 防止・abort 無視）
+- [x] frontend テスト基盤（Vitest + React Testing Library + jsdom、外部通信なし）
+- [x] 参考スコアの誤認防止（「テクニカル状態スコア」へ改称・注記・0〜100 到達）
+- [x] 免責事項の完全化（README / API / UI の一貫化、raw close 明記）
+- [x] FANG+ 参考プリセット表記（公式構成を保証しない旨・出典メタ）
+- [x] アクセシビリティ（tablist/tab/tabpanel・キーボード操作・role=status/alert・チャート読み上げ要約・フォーカス移動）
+- [x] README / TASKS の実装整合、`.claude/` の Git 除外
 
 ## Phase 7: テスト・セキュリティ
 
