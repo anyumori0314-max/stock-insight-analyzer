@@ -7,14 +7,53 @@
  */
 
 /**
- * The single window the MVP supports. `outputsize=compact` returns ~100 trading
- * days, so the only logical range is `"100d"`. Kept as a literal (not `string`)
- * so the type system rejects unsupported ranges like `"1y"` at compile time.
+ * Supported analysis windows.
+ *
+ * The free `TIME_SERIES_DAILY` feed is requested with `outputsize=compact`, which
+ * returns only the latest ~100 trading days. We therefore expose ONLY the windows
+ * that the compact feed can FULLY and HONESTLY back: `1m` (~21d) and `3m` (~63d).
+ *
+ * `6m` (~126d) and `1y` (~252d) are intentionally NOT supported: the compact feed
+ * cannot reach that far back, and presenting the same ~100 bars as "6 months" or
+ * "1 year" would be misleading. They are removed from this union, so the zod enum
+ * rejects them at runtime (`INVALID_RANGE`) and the UI never offers them. (Real
+ * 6m/1y support would require `outputsize=full`; that is a deliberate future
+ * change, documented in the README, not silently faked here.)
  */
-export type StockRange = "100d";
+export const STOCK_RANGES = ["1m", "3m"] as const;
+export type StockRange = (typeof STOCK_RANGES)[number];
 
-/** The default (and currently only) supported range. */
-export const SUPPORTED_RANGE: StockRange = "100d";
+/** Default window: fully covered by the compact feed and long enough for SMA50. */
+export const DEFAULT_RANGE: StockRange = "3m";
+
+/**
+ * Approximate US trading days per window (~21 sessions/month). The service slices
+ * the compact series to the last N bars for the requested window, so `1m` and
+ * `3m` always return genuinely different periods from the same compact fetch.
+ */
+export const RANGE_TRADING_DAYS: Record<StockRange, number> = {
+  "1m": 21,
+  "3m": 63,
+};
+
+/** Human-readable (Japanese) window labels, for warnings and the UI. */
+export const RANGE_LABEL: Record<StockRange, string> = {
+  "1m": "1か月",
+  "3m": "3か月",
+};
+
+/** Runtime guard for an arbitrary value being a supported range. */
+export function isStockRange(value: unknown): value is StockRange {
+  return typeof value === "string" && (STOCK_RANGES as readonly string[]).includes(value);
+}
+
+/**
+ * Which provider produced a report: "live" (Alpha Vantage) or "mock"
+ * (deterministic in-process fixtures). Defined here (a dependency-free module) so
+ * both the service and the persistent cache can reference it without a circular
+ * import; the persistent cache uses it to keep live and mock entries separated.
+ */
+export type StockDataMode = "live" | "mock";
 
 /** A single day's OHLCV bar. All numeric, already parsed and validated. */
 export interface DailyBar {
@@ -38,7 +77,7 @@ export interface DailyBar {
  */
 export interface StockTimeSeries {
   ticker: string;
-  /** Logical window identifier. MVP supports only `"100d"` (compact daily). */
+  /** Logical window identifier (`1m` / `3m`). */
   range: StockRange;
   /** Provider currency, if known. `TIME_SERIES_DAILY` does not report it -> null. */
   currency: string | null;

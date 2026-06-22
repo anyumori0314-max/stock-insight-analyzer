@@ -23,7 +23,7 @@ function makeSeries(closes: number[]): StockTimeSeries {
   });
   return {
     ticker: "AAPL",
-    range: "100d",
+    range: "3m",
     currency: null,
     timezone: "US/Eastern",
     lastRefreshed: "2026-06-19",

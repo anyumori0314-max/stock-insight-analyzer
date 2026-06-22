@@ -1,5 +1,5 @@
-import { DEFAULT_RANGE, type AlphaVantageClient } from "./alphaVantageClient";
-import type { DailyBar, StockRange, StockTimeSeries } from "../types/stock";
+import { type AlphaVantageClient } from "./alphaVantageClient";
+import { DEFAULT_RANGE, type DailyBar, type StockRange, type StockTimeSeries } from "../types/stock";
 
 /**
  * Deterministic, fully in-process stock data provider for local development.

@@ -49,6 +49,31 @@ describe("Sidebar — ticker form", () => {
   });
 });
 
+describe("Sidebar — ticker input form quality", () => {
+  it("gives the input a stable id + name and a matching associated label", () => {
+    setup();
+    const input = screen.getByLabelText("ティッカーシンボル");
+    expect(input.tagName).toBe("INPUT");
+    expect(input).toHaveAttribute("id", "ticker-input");
+    expect(input).toHaveAttribute("name", "ticker");
+    expect(input).toHaveAttribute("autocomplete", "off");
+
+    const label = screen.getByText("ティッカーシンボル");
+    expect(label.tagName).toBe("LABEL");
+    expect(label).toHaveAttribute("for", "ticker-input");
+  });
+
+  it("renders the submit button with the .btn class and stays operable", async () => {
+    const { onAdd, user } = setup();
+    const submit = screen.getByRole("button", { name: "追加" });
+    expect(submit).toHaveClass("btn");
+
+    await user.type(screen.getByLabelText("ティッカーシンボル"), "nvda");
+    await user.click(submit);
+    expect(onAdd).toHaveBeenCalledWith("NVDA");
+  });
+});
+
 describe("Sidebar — FANG+ presets", () => {
   it("notes that the preset is not the official index", () => {
     setup();

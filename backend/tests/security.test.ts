@@ -11,6 +11,33 @@ describe("Security headers (helmet)", () => {
     expect(res.headers["x-frame-options"]).toBeDefined();
     expect(res.headers["x-powered-by"]).toBeUndefined();
   });
+
+  it("sets a strict Content-Security-Policy, Referrer-Policy and Permissions-Policy", async () => {
+    const app = buildTestApp();
+    const res = await request(app).get("/api/health");
+
+    const csp = res.headers["content-security-policy"];
+    expect(csp).toMatch(/default-src 'none'/);
+    expect(csp).toMatch(/frame-ancestors 'none'/);
+
+    expect(res.headers["referrer-policy"]).toBe("no-referrer");
+    expect(res.headers["permissions-policy"]).toMatch(/geolocation=\(\)/);
+  });
+
+  it("does NOT send HSTS outside production (would be ignored over http anyway)", async () => {
+    const app = buildTestApp(); // NODE_ENV=test
+    const res = await request(app).get("/api/health");
+    expect(res.headers["strict-transport-security"]).toBeUndefined();
+  });
+
+  it("sends HSTS in production", async () => {
+    // Production startup requires an explicit CORS allow-list.
+    const app = buildTestApp({
+      env: { NODE_ENV: "production", ALLOWED_ORIGINS: "https://app.example" },
+    });
+    const res = await request(app).get("/api/health");
+    expect(res.headers["strict-transport-security"]).toMatch(/max-age=\d+/);
+  });
 });
 
 describe("Error responses", () => {

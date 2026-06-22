@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { DEFAULT_RANGE, STOCK_RANGES } from "../types/stock";
+
 /**
  * Maximum accepted length (after trimming). Guards against oversized input
  * before any further processing. Real US tickers are short; class-share
@@ -36,3 +38,16 @@ export const tickerSchema = z
   .transform((value) => value.toUpperCase());
 
 export type Ticker = z.infer<typeof tickerSchema>;
+
+/**
+ * Validates the optional `?range=` query parameter. A missing value defaults to
+ * the standard window; anything other than a supported window (including a
+ * repeated/array param) is rejected as `INVALID_RANGE` — we never accept a
+ * range we cannot actually serve.
+ */
+export const rangeQuerySchema = z.preprocess(
+  (value) => (value === undefined || value === null ? DEFAULT_RANGE : value),
+  z.enum(STOCK_RANGES)
+);
+
+export type RangeQuery = z.infer<typeof rangeQuerySchema>;

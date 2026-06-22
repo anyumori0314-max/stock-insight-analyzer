@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -9,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { prepareChartData } from "../lib/chart";
 import { formatPrice } from "../lib/format";
 import type { StockPricePoint, TrendVerdict } from "../types/stock";
 
@@ -58,9 +60,18 @@ function buildSummary(props: PriceChartProps): string {
   );
 }
 
-export function PriceChart(props: PriceChartProps) {
+/**
+ * Memoized so switching unrelated dashboard state (pending flags, other tickers)
+ * never re-runs the relatively expensive Recharts render. It only re-renders when
+ * its own props change. It is also lazy-loaded by `App` so Recharts is not in the
+ * initial bundle.
+ */
+export const PriceChart = memo(function PriceChart(props: PriceChartProps) {
   const { bars, currency } = props;
   const summary = buildSummary(props);
+  // Render-side guard against an unexpectedly long series; realistic data
+  // (<= ~252 bars) passes through untouched (same reference).
+  const data = useMemo(() => prepareChartData(bars), [bars]);
 
   if (bars.length === 0) {
     return <p className="muted">{summary}</p>;
@@ -69,10 +80,18 @@ export function PriceChart(props: PriceChartProps) {
   return (
     <figure className="chart-figure">
       <figcaption className="chart-summary">{summary}</figcaption>
-      {/* The SVG is decorative for assistive tech; the caption above conveys the data. */}
-      <div aria-hidden="true">
+      {/* The SVG is decorative for assistive tech; the caption above conveys the
+          data. `accessibilityLayer={false}` keeps Recharts from emitting a
+          tabIndex=0 / role="application" surface, so this aria-hidden subtree
+          holds NO keyboard-focusable element (a hidden focus stop would strand
+          keyboard users on an element screen readers cannot announce). */}
+      <div className="chart-canvas" aria-hidden="true">
         <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={bars} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+          <LineChart
+            data={data}
+            margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
+            accessibilityLayer={false}
+          >
             <CartesianGrid stroke={GRID_COLOR} strokeDasharray="3 3" />
             <XAxis
               dataKey="date"
@@ -104,4 +123,4 @@ export function PriceChart(props: PriceChartProps) {
       </div>
     </figure>
   );
-}
+});

@@ -6,10 +6,15 @@ import type { Env } from "./config/env";
 import { createErrorHandler } from "./middleware/errorHandler";
 import { notFoundHandler } from "./middleware/notFoundHandler";
 import { createLimiter } from "./middleware/rateLimiter";
+import { requestId } from "./middleware/requestId";
+import { requestLogger } from "./middleware/requestLogger";
 import { healthRouter } from "./routes/health";
+import { createReadinessRouter } from "./routes/ready";
 import { createStockRouter } from "./routes/stock";
+import { createFileReportRepository, type StockReportRepository } from "./services/reportRepository";
 import { createStockService, type StockService } from "./services/stockService";
 import { ApiError } from "./types/errors";
+import { silentLogger, type Logger } from "./utils/logger";
 
 const DEFAULT_DEV_ORIGIN = "http://localhost:5173";
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
@@ -28,6 +33,15 @@ export interface CreateAppOptions {
   rateLimit?: RateLimitOptions;
   /** Injects a pre-built stock service (tests use a fake client / no network). */
   stockService?: StockService;
+  /** Structured logger. Defaults to a silent logger (quiet tests). */
+  logger?: Logger;
+  /**
+   * Persistent report cache. Injected by tests (temp dir / fake). When omitted,
+   * a file-based repository is created OUTSIDE of test mode; in tests the
+   * persistent layer stays off unless explicitly provided, so the suite never
+   * touches the disk.
+   */
+  reportRepository?: StockReportRepository;
 }
 
 /**
@@ -61,8 +75,22 @@ function resolveRateLimit(options: CreateAppOptions): RateLimitOptions {
 export function createApp(options: CreateAppOptions): Express {
   const { env } = options;
   const isDevelopment = env.NODE_ENV === "development";
+  const isProduction = env.NODE_ENV === "production";
   const allowedOrigins = resolveAllowedOrigins(env);
   const rateLimitConfig = resolveRateLimit(options);
+  const logger = options.logger ?? silentLogger;
+
+  // Persistent (disk) report cache — the second cache layer. Off in test mode
+  // (so the suite never writes files) unless a test injects its own.
+  const reportRepository =
+    options.reportRepository ??
+    (env.NODE_ENV === "test"
+      ? undefined
+      : createFileReportRepository({
+          dir: env.STOCK_CACHE_DIR,
+          maxEntries: env.STOCK_CACHE_MAX_ENTRIES,
+          logger,
+        }));
 
   // Build the stock service from the configured API key unless a test injects
   // one. A missing key does not block startup — requests then surface an
@@ -76,6 +104,7 @@ export function createApp(options: CreateAppOptions): Express {
       maxPoints: env.ALPHA_VANTAGE_MAX_POINTS,
       cacheTtlMs: env.STOCK_CACHE_TTL_SECONDS * 1000,
       cacheMaxEntries: env.STOCK_CACHE_MAX_ENTRIES,
+      reportRepository,
     });
 
   const app = express();
@@ -86,6 +115,12 @@ export function createApp(options: CreateAppOptions): Express {
   // address); we never use the unconditional `true`, which would trust a
   // forgeable `X-Forwarded-For`.
   app.set("trust proxy", env.TRUST_PROXY);
+
+  // 0. Correlation id + structured access log run FIRST so every response —
+  // including health probes, rate-limited 429s, 404s and errors — carries an
+  // `X-Request-Id` and produces exactly one safe log record.
+  app.use(requestId());
+  app.use(requestLogger(logger));
 
   // --- Middleware order (security-critical) ---------------------------------
   // 1. helmet       — baseline security headers on every response.
@@ -100,9 +135,41 @@ export function createApp(options: CreateAppOptions): Express {
   // 8. errorHandler — unified error contract; never leaks internals.
   // --------------------------------------------------------------------------
 
-  // 1. Security headers. Defaults are kept (not loosened); cross-origin access
-  // to this JSON API is governed explicitly by the CORS allow-list below.
-  app.use(helmet());
+  // 1. Security headers. This server returns ONLY JSON (the SPA is built and
+  // served separately — see docs/DEPLOYMENT.md), so the strictest CSP applies:
+  // nothing may be loaded, embedded or framed. These are defense-in-depth
+  // (browsers do not apply CSP to JSON documents) but cost nothing and harden
+  // any future HTML surface. Cross-origin access is governed by the CORS
+  // allow-list below; CORP is set to cross-origin so the configured SPA origin
+  // can read the API while CORS still restricts WHICH origins may do so.
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          defaultSrc: ["'none'"],
+          baseUri: ["'none'"],
+          formAction: ["'none'"],
+          frameAncestors: ["'none'"],
+        },
+      },
+      referrerPolicy: { policy: "no-referrer" },
+      // HSTS only in production (served over HTTPS). In dev/test over plain HTTP
+      // it would be ignored anyway; keeping it off matches deployment reality.
+      hsts: isProduction ? { maxAge: 15_552_000, includeSubDomains: true } : false,
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    })
+  );
+
+  // helmet does not emit Permissions-Policy; explicitly deny powerful browser
+  // features this API never uses, on every response.
+  app.use((_req, res, next) => {
+    res.setHeader(
+      "Permissions-Policy",
+      "geolocation=(), camera=(), microphone=(), payment=(), usb=()"
+    );
+    next();
+  });
 
   // 2. CORS.
   app.use(
@@ -136,11 +203,20 @@ export function createApp(options: CreateAppOptions): Express {
     limit: rateLimitConfig.stockLimit,
   });
 
-  // 3. Health is intentionally mounted before any limiter or body parser:
-  // monitoring / liveness probes must stay reliable, and the endpoint is a
-  // trivial static JSON response (no I/O, no body parsing), so its abuse
-  // surface is negligible.
+  // 3. Health (liveness) and readiness are mounted before any limiter or body
+  // parser: monitoring probes must stay reliable, and both are trivial static
+  // JSON responses (no I/O, no body parsing, no provider calls), so their abuse
+  // surface is negligible. Liveness = "process up"; readiness = "ready to serve"
+  // (reports the active data mode, never touches Alpha Vantage).
   app.use("/api/health", healthRouter);
+  app.use(
+    "/api/ready",
+    createReadinessRouter({
+      dataMode: env.STOCK_DATA_MODE,
+      // Boolean only — the key VALUE is never passed to (or returned by) the probe.
+      apiKeyConfigured: Boolean(env.ALPHA_VANTAGE_API_KEY),
+    })
+  );
 
   // 4. Baseline API limiter — must run before the body parser so that invalid
   // JSON, oversized bodies and other parser failures are also throttled.
@@ -152,9 +228,10 @@ export function createApp(options: CreateAppOptions): Express {
   // 6. Stricter limiter for stock routes.
   app.use("/api/stock", stockLimiter, createStockRouter(stockService));
 
-  // 7 & 8. Unified 404 + error contract.
+  // 7 & 8. Unified 404 + error contract. The error handler logs unexpected
+  // errors through the structured logger (never the raw Error / stack).
   app.use(notFoundHandler);
-  app.use(createErrorHandler({ isDevelopment }));
+  app.use(createErrorHandler({ isDevelopment, logger }));
 
   return app;
 }

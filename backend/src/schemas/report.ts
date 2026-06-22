@@ -84,8 +84,8 @@ export const stockReportSchema = z
     // Required (no default): a missing source must FAIL validation, never be
     // silently assumed. The service always stamps "live" or "mock".
     source: z.enum(["live", "mock"]),
-    // MVP supports only the compact ~100-day window.
-    range: z.literal("100d"),
+    // One of the supported analysis windows (compact feed backs only 1m / 3m).
+    range: z.enum(["1m", "3m"]),
     currency: z.string().nullable(),
     timezone: z.string().nullable(),
     lastRefreshed: realProviderTimestamp.nullable(),

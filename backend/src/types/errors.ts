@@ -11,6 +11,7 @@
 export type ErrorCode =
   | "VALIDATION_ERROR"
   | "INVALID_TICKER"
+  | "INVALID_RANGE"
   | "INVALID_JSON"
   | "PAYLOAD_TOO_LARGE"
   | "FORBIDDEN_ORIGIN"
@@ -42,6 +43,8 @@ export interface ErrorResponseBody {
   error: {
     code: ErrorCode;
     message: string;
+    /** Correlation id for support/log lookup. Safe (generated or validated). */
+    requestId?: string;
     details?: unknown;
   };
 }
@@ -65,6 +68,7 @@ export interface ErrorDescriptor {
 export const ERROR_CATALOG: Record<ErrorCode, ErrorDescriptor> = {
   VALIDATION_ERROR: { status: 400, message: "The request was invalid.", retryable: false },
   INVALID_TICKER: { status: 400, message: "The ticker format is invalid.", retryable: false },
+  INVALID_RANGE: { status: 400, message: "The requested range is not supported.", retryable: false },
   INVALID_JSON: { status: 400, message: "The request body contains invalid JSON.", retryable: false },
   PAYLOAD_TOO_LARGE: { status: 413, message: "The request body is too large.", retryable: false },
   FORBIDDEN_ORIGIN: { status: 403, message: "Origin is not allowed.", retryable: false },

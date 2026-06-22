@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import { tickerSchema } from "../schemas/stock";
+import { rangeQuerySchema, tickerSchema } from "../schemas/stock";
 import type { StockService } from "../services/stockService";
 import { ApiError } from "../types/errors";
 import { asyncHandler } from "../utils/asyncHandler";
@@ -31,7 +31,24 @@ export function createStockRouter(service: StockService): Router {
         );
       }
 
-      const report = await service.getReport(result.data);
+      // Optional ?range= (defaults to the standard window). An unsupported range
+      // is rejected rather than silently coerced.
+      const rangeResult = rangeQuerySchema.safeParse(req.query.range);
+      if (!rangeResult.success) {
+        throw new ApiError(
+          400,
+          "INVALID_RANGE",
+          "The requested range is not supported.",
+          rangeResult.error.issues.map((issue) => issue.message)
+        );
+      }
+
+      const report = await service.getReport(result.data, rangeResult.data);
+      // Expose safe, already-normalized fields for the structured access logger
+      // (never raw input, never secrets).
+      res.locals.ticker = report.ticker;
+      res.locals.cacheHit = report.cache.hit;
+      res.locals.source = report.source;
       res.json(report);
     })
   );

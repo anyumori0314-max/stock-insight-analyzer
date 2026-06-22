@@ -66,14 +66,22 @@ export function Sidebar({ selected, onAdd, onRemove }: SidebarProps) {
           個別銘柄を追加
         </h2>
         <form className="ticker-form" onSubmit={handleSubmit} noValidate>
+          {/* Visually hidden but a real, associated label: gives the field a
+              stable accessible name and silences the browser's "form field has
+              no id/name/label" autofill warnings without changing the layout. */}
+          <label className="sr-only" htmlFor="ticker-input">
+            ティッカーシンボル
+          </label>
           <div className="ticker-form__row">
             <input
+              id="ticker-input"
+              name="ticker"
               className="text-input"
               type="text"
               value={input}
               placeholder="例: BRK.B"
-              aria-label="ティッカーシンボル"
               aria-invalid={error !== ""}
+              autoComplete="off"
               maxLength={10}
               autoCapitalize="characters"
               autoCorrect="off"

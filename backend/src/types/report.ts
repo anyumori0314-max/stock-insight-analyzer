@@ -72,7 +72,7 @@ export interface StockReport {
    * notice for "mock" so development data is never mistaken for real prices.
    */
   source: "live" | "mock";
-  /** Logical window identifier. MVP supports only `"100d"`. */
+  /** Logical window identifier (`1m` / `3m`). */
   range: StockRange;
   /** Reporting currency if known; null for `TIME_SERIES_DAILY`. */
   currency: string | null;

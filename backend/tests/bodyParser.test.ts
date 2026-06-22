@@ -14,12 +14,11 @@ describe("JSON body parser errors", () => {
       .send('{ "ticker": ');
 
     expect(res.status).toBe(400);
-    expect(res.body).toEqual({
-      error: {
-        code: "INVALID_JSON",
-        message: "The request body contains invalid JSON.",
-      },
-    });
+    expect(res.body.error.code).toBe("INVALID_JSON");
+    expect(res.body.error.message).toBe("The request body contains invalid JSON.");
+    // The unified error body now also carries a safe correlation id.
+    expect(res.body.error.requestId).toBe(res.headers["x-request-id"]);
+    expect(res.body.error).not.toHaveProperty("details");
   });
 
   it("returns a unified 413 PAYLOAD_TOO_LARGE when the body exceeds the cap", async () => {
@@ -30,12 +29,9 @@ describe("JSON body parser errors", () => {
       .send(OVERSIZED_BODY);
 
     expect(res.status).toBe(413);
-    expect(res.body).toEqual({
-      error: {
-        code: "PAYLOAD_TOO_LARGE",
-        message: "The request body is too large.",
-      },
-    });
+    expect(res.body.error.code).toBe("PAYLOAD_TOO_LARGE");
+    expect(res.body.error.message).toBe("The request body is too large.");
+    expect(res.body.error.requestId).toBe(res.headers["x-request-id"]);
   });
 
   it("does not expose body-parser internals (no stack / parser message)", async () => {
