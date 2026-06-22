@@ -19,6 +19,14 @@ describe("fetchStockReport — success", () => {
     expect(report.ticker).toBe("AAPL");
     expect(report.metrics.currentPrice).toBe(104);
   });
+
+  it("includes the requested range in the request URL", async () => {
+    const spy = mockFetch(async () => jsonResponse(makeReport({ range: "1m" })));
+    await fetchStockReport("AAPL", "1m");
+    const url = spy.mock.calls[0][0] as string;
+    expect(url).toContain("/api/stock/AAPL");
+    expect(url).toContain("range=1m");
+  });
 });
 
 describe("fetchStockReport — error status mapping", () => {
@@ -108,7 +116,7 @@ describe("fetchStockReport — network / timeout / abort", () => {
         })
     );
 
-    const promise = fetchStockReport("AAPL", controller.signal);
+    const promise = fetchStockReport("AAPL", "3m", controller.signal);
     controller.abort();
     const error = await promise.catch((e) => e);
     expect(error).toBeInstanceOf(DOMException);

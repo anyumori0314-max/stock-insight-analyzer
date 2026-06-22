@@ -82,7 +82,11 @@ describe("CORS — ALLOWED_ORIGINS parsing", () => {
 
 describe("CORS — production hardening", () => {
   it("does not allow localhost by default in production", async () => {
-    const app = buildTestApp({ env: { NODE_ENV: "production" } });
+    // Production requires an explicit allow-list; configure a real origin, then
+    // confirm the dev origin is still NOT auto-allowed.
+    const app = buildTestApp({
+      env: { NODE_ENV: "production", ALLOWED_ORIGINS: "https://app.example" },
+    });
     const res = await request(app).get("/api/health").set("Origin", DEV_ORIGIN);
 
     expect(res.status).toBe(403);

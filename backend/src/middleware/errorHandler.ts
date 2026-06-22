@@ -1,8 +1,11 @@
 import type { ErrorRequestHandler } from "express";
 import { ApiError, type ErrorCode, type ErrorResponseBody } from "../types/errors";
+import { silentLogger, type Logger } from "../utils/logger";
 
 interface ErrorHandlerOptions {
   isDevelopment: boolean;
+  /** Structured logger for safe error events. Defaults to silent (tests). */
+  logger?: Logger;
 }
 
 /**
@@ -67,21 +70,33 @@ function classifyBodyParserError(
  *   stack traces, paths) are never exposed to clients.
  * - `details` is only attached in development.
  */
-export function createErrorHandler({ isDevelopment }: ErrorHandlerOptions): ErrorRequestHandler {
-  return (err, _req, res, next) => {
+export function createErrorHandler({
+  isDevelopment,
+  logger = silentLogger,
+}: ErrorHandlerOptions): ErrorRequestHandler {
+  return (err, req, res, next) => {
     // If the response already started, defer to Express' default handling.
     if (res.headersSent) {
       next(err);
       return;
     }
 
+    // Correlation id (set by the requestId middleware). Safe to echo: it is
+    // either a freshly generated UUID or a validated, allow-listed client value.
+    const requestId = req.requestId;
+
     if (err instanceof ApiError) {
+      // Record the public code so the access logger can include it.
+      res.locals.errorCode = err.code;
       const body: ErrorResponseBody = {
         error: {
           code: err.code,
           message: err.message,
         },
       };
+      if (requestId) {
+        body.error.requestId = requestId;
+      }
       if (isDevelopment && err.details !== undefined) {
         body.error.details = err.details;
       }
@@ -92,20 +107,32 @@ export function createErrorHandler({ isDevelopment }: ErrorHandlerOptions): Erro
     // Body-parser errors carry a stable `type`; map them to public-safe codes.
     const bodyParserError = classifyBodyParserError(err);
     if (bodyParserError) {
+      res.locals.errorCode = bodyParserError.code;
       const body: ErrorResponseBody = {
         error: {
           code: bodyParserError.code,
           message: bodyParserError.message,
         },
       };
+      if (requestId) {
+        body.error.requestId = requestId;
+      }
       res.status(bodyParserError.status).json(body);
       return;
     }
 
-    // Unexpected error: log locally (dev only) but never leak to the client.
-    if (isDevelopment) {
-      console.error("[unhandled-error]", err);
-    }
+    // Unexpected error. NEVER pass the raw Error to console.error: its message,
+    // stack and any embedded local absolute paths / secrets must not be logged,
+    // in development OR production. Instead emit a structured event carrying only
+    // safe, flat fields (the logger's type signature physically prevents passing
+    // an Error/stack, and a denylist redacts secret-looking keys). The access
+    // logger additionally records the same status + errorCode on response finish.
+    res.locals.errorCode = "INTERNAL_SERVER_ERROR";
+    logger.error("error.unhandled", {
+      requestId,
+      status: 500,
+      errorCode: "INTERNAL_SERVER_ERROR",
+    });
 
     const body: ErrorResponseBody = {
       error: {
@@ -113,6 +140,9 @@ export function createErrorHandler({ isDevelopment }: ErrorHandlerOptions): Erro
         message: "An unexpected error occurred.",
       },
     };
+    if (requestId) {
+      body.error.requestId = requestId;
+    }
     res.status(500).json(body);
   };
 }

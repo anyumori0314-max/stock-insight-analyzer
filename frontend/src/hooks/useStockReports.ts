@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fetchStockReport, StockApiError } from "../lib/api";
+import type { StockRange } from "../lib/ranges";
 import type { StockReport } from "../types/stock";
 
 export type ReportState =
@@ -8,23 +9,29 @@ export type ReportState =
   | { status: "success"; report: StockReport }
   | { status: "error"; message: string; code: string };
 
+/** Store key for a (ticker, range) pair. Distinct ranges are distinct entries. */
+export function reportKey(ticker: string, range: StockRange): string {
+  return `${ticker}:${range}`;
+}
+
 export interface UseStockReportsResult {
+  /** Keyed by `reportKey(ticker, range)` so each window is tracked separately. */
   reports: Record<string, ReportState>;
-  /** Tickers with an outbound request currently in flight (UI: disable/relabel). */
+  /** Keys with an outbound request currently in flight (UI: disable/relabel). */
   pending: Record<string, boolean>;
   /**
-   * Lazily fetches ONE ticker, on demand. No-op if it is already loaded /
-   * errored / in flight — selecting a ticker never silently re-fetches or
-   * auto-retries (that is what `refetch` is for). This is the only path that
-   * ever triggers a network call, so nothing is fetched until the user picks a
-   * ticker.
+   * Lazily fetches ONE (ticker, range), on demand. No-op if it is already loaded
+   * / errored / in flight — selecting never silently re-fetches or auto-retries
+   * (that is what `refetch` is for). This is the only path that triggers a
+   * network call, so nothing is fetched until the user picks a ticker/range.
    */
-  request: (ticker: string) => void;
-  /** Explicit user-driven re-fetch of a single ticker (the retry button). */
-  refetch: (ticker: string) => void;
+  request: (ticker: string, range: StockRange) => void;
+  /** Explicit user-driven re-fetch of a single (ticker, range). */
+  refetch: (ticker: string, range: StockRange) => void;
   /**
-   * Drops a ticker: aborts any in-flight request, invalidates its generation so
-   * a late response can never revive it, and clears its report / pending state.
+   * Drops a ticker entirely (ALL of its ranges): aborts any in-flight requests,
+   * invalidates their generations so a late response can never revive them, and
+   * clears their report / pending state.
    */
   forget: (ticker: string) => void;
 }
@@ -34,24 +41,22 @@ function isAbortError(err: unknown): boolean {
 }
 
 /**
- * On-demand, per-ticker report store.
+ * On-demand, per-(ticker, range) report store.
  *
- * Design goals (API-quota safety + request lifecycle correctness):
+ * Same lifecycle guarantees as before, now keyed by `ticker:range` so changing
+ * the window fetches (and caches) independently of other windows:
  *  - NOTHING is fetched on mount or on selection changes; a request happens only
- *    when {@link UseStockReportsResult.request} / `refetch` is called for one
- *    ticker, so the dashboard issues zero calls until the user selects a symbol.
- *  - In-flight de-duplication: a second `request`/`refetch` for a ticker already
- *    being fetched is ignored (also makes React StrictMode's double-invoke and
- *    rapid double-clicks safe — exactly one call goes out).
- *  - No auto-retry: a failed ticker stays failed until the user explicitly hits
- *    retry (`refetch`); errors never schedule timers or re-fetches.
- *  - Results persist: already-fetched tickers keep their data; re-selecting a
- *    ticker serves the kept success state instead of calling the API again.
- *  - Lifecycle-safe: removing a ticker aborts its request and bumps a per-ticker
- *    generation; unmounting aborts everything. A response is applied only when it
- *    is still the latest, non-aborted request and the component is mounted, so a
- *    late/forgotten/superseded response can neither revive removed state nor warn
- *    about updating an unmounted component.
+ *    via {@link UseStockReportsResult.request} / `refetch` for one key.
+ *  - In-flight de-duplication per key (StrictMode double-invoke / double-click
+ *    safe — exactly one call per key goes out).
+ *  - No auto-retry: a failed key stays failed until the user hits retry.
+ *  - Results persist: an already-fetched key serves its kept state; switching
+ *    back to a previously loaded range never re-calls the API.
+ *  - Lifecycle-safe: removing a ticker aborts every in-flight range and bumps
+ *    per-key generations; unmounting aborts everything. A response applies only
+ *    when it is still the latest, non-aborted request and the component is
+ *    mounted, so a late/forgotten/superseded response can neither revive removed
+ *    state nor warn about updating an unmounted component.
  */
 export function useStockReports(): UseStockReportsResult {
   const [reports, setReports] = useState<Record<string, ReportState>>({});
@@ -60,12 +65,7 @@ export function useStockReports(): UseStockReportsResult {
   const reportsRef = useRef(reports);
   reportsRef.current = reports;
 
-  // controllersRef: active AbortController per ticker — the synchronous source of
-  // truth for the in-flight check, and what we abort on removal / unmount.
   const controllersRef = useRef(new Map<string, AbortController>());
-  // generationRef: monotonically increasing request id per ticker. Each request
-  // captures its id; removal and newer requests bump it, so a stale settle (even
-  // one we could not abort) is detected by an id mismatch and ignored.
   const generationRef = useRef(new Map<string, number>());
   const mountedRef = useRef(true);
 
@@ -74,102 +74,113 @@ export function useStockReports(): UseStockReportsResult {
     const controllers = controllersRef.current;
     return () => {
       mountedRef.current = false;
-      // Internal-ref cleanup: abort and drop every in-flight request. State is
-      // intentionally NOT touched here (the component is going away).
       controllers.forEach((controller) => controller.abort());
       controllers.clear();
     };
   }, []);
 
-  /** Bumps and returns the ticker's generation, invalidating older requests. */
-  const bumpGeneration = (ticker: string): number => {
-    const next = (generationRef.current.get(ticker) ?? 0) + 1;
-    generationRef.current.set(ticker, next);
+  /** Bumps and returns the key's generation, invalidating older requests. */
+  const bumpGeneration = (key: string): number => {
+    const next = (generationRef.current.get(key) ?? 0) + 1;
+    generationRef.current.set(key, next);
     return next;
   };
 
-  const run = useCallback((ticker: string, force: boolean) => {
-    // Already fetching this ticker -> never send a duplicate request.
-    if (controllersRef.current.has(ticker)) {
+  const run = useCallback((ticker: string, range: StockRange, force: boolean) => {
+    const key = reportKey(ticker, range);
+    // Already fetching this key -> never send a duplicate request.
+    if (controllersRef.current.has(key)) {
       return;
     }
-    const existing = reportsRef.current[ticker];
-    // Without `force`, an existing entry (loading/success/error) is left alone:
-    // selecting a ticker prefers the cache and never auto-retries an error.
+    const existing = reportsRef.current[key];
+    // Without `force`, an existing entry (loading/success/error) is left alone.
     if (!force && existing) {
       return;
     }
 
-    const generation = bumpGeneration(ticker);
+    const generation = bumpGeneration(key);
     const controller = new AbortController();
-    controllersRef.current.set(ticker, controller);
+    controllersRef.current.set(key, controller);
 
-    setPending((prev) => ({ ...prev, [ticker]: true }));
-    // Show the loading state only for a first-time fetch; a forced retry keeps
-    // the previous error/success visible (with the button disabled) instead of
-    // flashing a full-panel spinner.
-    setReports((prev) => (prev[ticker] ? prev : { ...prev, [ticker]: { status: "loading" } }));
+    setPending((prev) => ({ ...prev, [key]: true }));
+    // Show loading only for a first-time fetch; a forced retry keeps the previous
+    // error/success visible (button disabled) instead of flashing a spinner.
+    setReports((prev) => (prev[key] ? prev : { ...prev, [key]: { status: "loading" } }));
 
-    // Stale if the component unmounted, this request was aborted, or a newer
-    // request / a removal bumped this ticker's generation.
     const isStale = () =>
       !mountedRef.current ||
       controller.signal.aborted ||
-      generationRef.current.get(ticker) !== generation;
+      generationRef.current.get(key) !== generation;
 
-    fetchStockReport(ticker, controller.signal)
+    fetchStockReport(ticker, range, controller.signal)
       .then((report) => {
         if (isStale()) return;
-        setReports((prev) => ({ ...prev, [ticker]: { status: "success", report } }));
+        setReports((prev) => ({ ...prev, [key]: { status: "success", report } }));
       })
       .catch((err: unknown) => {
         if (isStale() || isAbortError(err)) return;
         const message =
           err instanceof StockApiError ? err.message : "予期しないエラーが発生しました。";
         const code = err instanceof StockApiError ? err.code : "UNKNOWN";
-        setReports((prev) => ({ ...prev, [ticker]: { status: "error", message, code } }));
+        setReports((prev) => ({ ...prev, [key]: { status: "error", message, code } }));
       })
       .finally(() => {
-        // Internal-ref cleanup runs regardless of mount state, but only if THIS
-        // request still owns the slot (a newer request may have replaced it).
-        if (controllersRef.current.get(ticker) === controller) {
-          controllersRef.current.delete(ticker);
+        if (controllersRef.current.get(key) === controller) {
+          controllersRef.current.delete(key);
         }
-        // State update is suppressed after unmount and for superseded requests.
-        if (!mountedRef.current || generationRef.current.get(ticker) !== generation) {
+        if (!mountedRef.current || generationRef.current.get(key) !== generation) {
           return;
         }
         setPending((prev) => {
-          if (!prev[ticker]) return prev;
+          if (!prev[key]) return prev;
           const next = { ...prev };
-          delete next[ticker];
+          delete next[key];
           return next;
         });
       });
   }, []);
 
-  const request = useCallback((ticker: string) => run(ticker, false), [run]);
-  const refetch = useCallback((ticker: string) => run(ticker, true), [run]);
+  const request = useCallback((ticker: string, range: StockRange) => run(ticker, range, false), [run]);
+  const refetch = useCallback((ticker: string, range: StockRange) => run(ticker, range, true), [run]);
 
   const forget = useCallback((ticker: string) => {
-    // Invalidate any in-flight request first so its pending settle is ignored.
-    bumpGeneration(ticker);
-    const controller = controllersRef.current.get(ticker);
-    if (controller) {
-      controller.abort();
-      controllersRef.current.delete(ticker);
-    }
+    const prefix = `${ticker}:`;
+    // Collect every range-key belonging to this ticker.
+    const keys = new Set<string>();
+    controllersRef.current.forEach((_, k) => {
+      if (k.startsWith(prefix)) keys.add(k);
+    });
+    Object.keys(reportsRef.current).forEach((k) => {
+      if (k.startsWith(prefix)) keys.add(k);
+    });
+
+    keys.forEach((key) => {
+      // Invalidate any in-flight request first so its pending settle is ignored.
+      bumpGeneration(key);
+      const controller = controllersRef.current.get(key);
+      if (controller) {
+        controller.abort();
+        controllersRef.current.delete(key);
+      }
+    });
+
     setReports((prev) => {
-      if (!(ticker in prev)) return prev;
-      const next = { ...prev };
-      delete next[ticker];
-      return next;
+      const next: Record<string, ReportState> = {};
+      let changed = false;
+      for (const [k, v] of Object.entries(prev)) {
+        if (k.startsWith(prefix)) changed = true;
+        else next[k] = v;
+      }
+      return changed ? next : prev;
     });
     setPending((prev) => {
-      if (!prev[ticker]) return prev;
-      const next = { ...prev };
-      delete next[ticker];
-      return next;
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      for (const [k, v] of Object.entries(prev)) {
+        if (k.startsWith(prefix)) changed = true;
+        else next[k] = v;
+      }
+      return changed ? next : prev;
     });
   }, []);
 

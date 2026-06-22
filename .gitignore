@@ -3,6 +3,12 @@ dist/
 build/
 coverage/
 
+# Persistent stock-report cache (disk layer) and any local DB files
+.cache/
+*.sqlite
+*.sqlite3
+*.db
+
 .env
 .env.*
 !.env.example

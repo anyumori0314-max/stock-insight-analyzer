@@ -11,6 +11,12 @@
   --color-text-muted: #9aa6c4;
   --color-primary: #4f8cff;
   --color-primary-strong: #3a6fe0;
+  /* Solid button fill. White text on #3568d8 = 5.1:1 (WCAG AA for normal text);
+     #4f8cff was only ~3.2:1. Hover goes darker (6.4:1) and stays distinct. The
+     bright --color-primary is kept for borders / focus rings / translucent
+     accents, which are not body text and meet the 3:1 non-text threshold. */
+  --color-btn: #3568d8;
+  --color-btn-hover: #2b59c0;
 
   --color-up: #2fbf71;
   --color-down: #ff5d6c;
@@ -199,13 +205,24 @@ button {
   padding: var(--space-2) var(--space-4);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--color-primary);
+  background: var(--color-btn);
   color: white;
   font-weight: 600;
 }
 
 .btn:hover {
-  background: var(--color-primary-strong);
+  background: var(--color-btn-hover);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .btn--ghost {
@@ -581,8 +598,139 @@ button {
   border: 0;
 }
 
+/* Data-source / cache status line (words + tags, never color alone). */
+.data-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: 0.8rem;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tag--source-mock {
+  border-color: var(--color-warn);
+  color: var(--color-warn);
+}
+
+.tag--source-live {
+  border-color: rgba(47, 191, 113, 0.5);
+  color: var(--color-up);
+}
+
+/* Range selector (period switch). */
+.range-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.range-switch__btn {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: 0.8rem;
+}
+
+.range-switch__btn[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  background: rgba(79, 140, 255, 0.18);
+}
+
+.range-switch__btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Toolbar wrapping the range switch and export action. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* Long tickers / values must never blow out the layout. */
+.tab,
+.preset-chip__symbol,
+.comparison-table td:first-child,
+.row-link {
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================================
+ * Error boundary (full-screen safe fallback)
+ * ========================================================================== */
+.error-boundary {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.error-boundary__card {
+  max-width: 520px;
+  width: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.error-boundary__title {
+  font-size: 1.2rem;
+  margin-bottom: var(--space-3);
+  color: var(--color-warn);
+}
+
+.error-boundary__text {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin: 0 0 var(--space-4);
+}
+
+.error-boundary__detail {
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  text-align: left;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ============================================================================
  * Responsive
+ *   Verified against 320 / 375 / 768 / 1024 / 1440 px widths: the sidebar
+ *   reflows above the main column on narrow screens, the comparison table
+ *   scrolls horizontally inside `.table-wrap` (no data loss), the chart is
+ *   width-constrained by ResponsiveContainer, and long tickers/values wrap
+ *   instead of forcing page-level horizontal scroll.
  * ========================================================================== */
 @media (max-width: 900px) {
   .app-body {
@@ -591,7 +739,57 @@ button {
   }
   .app-header {
     flex-direction: column;
+    align-items: flex-start;
     gap: var(--space-1);
     padding: var(--space-4);
+  }
+}
+
+@media (max-width: 768px) {
+  .card {
+    padding: var(--space-4);
+  }
+  .card__header {
+    flex-wrap: wrap;
+  }
+  .metrics-grid {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .app-body {
+    padding: var(--space-3);
+    gap: var(--space-4);
+  }
+  .preset-grid {
+    grid-template-columns: 1fr;
+  }
+  .metrics-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .metric-card__value {
+    font-size: 1.1rem;
+  }
+  .card,
+  .panel {
+    padding: var(--space-3);
+  }
+  /* Comfortable tap targets on phones (>= ~40px) for primary controls. */
+  .btn,
+  .preset-chip,
+  .tab,
+  .range-switch__btn,
+  .row-remove {
+    min-height: 40px;
+  }
+  .app-header__title {
+    font-size: 1.1rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .metrics-grid {
+    grid-template-columns: 1fr;
   }
 }

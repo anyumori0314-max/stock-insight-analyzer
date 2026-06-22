@@ -49,6 +49,13 @@ const envSchema = z
     .positive()
     .max(86_400)
     .default(21_600),
+  // Directory for the PERSISTENT (disk) report cache — the second cache layer
+  // that survives restarts. Stores only validated public `StockReport`s
+  // (never the API key or raw provider bodies), keyed by `ticker:range` with a
+  // TTL + schema version. Relative paths resolve from the process CWD; point it
+  // at a writable, persistent volume in production. The directory itself is
+  // git-ignored. A write failure degrades to memory-only (never a request error).
+  STOCK_CACHE_DIR: z.string().min(1).default(".cache/stock-reports"),
   // Data source for stock reports:
   //   live = call Alpha Vantage (consumes the free-tier quota).
   //   mock = serve deterministic in-process fixtures (no external traffic).
@@ -69,17 +76,35 @@ const envSchema = z
         : []
     ),
   })
-  // Cross-field guard: never run the mock provider in production. This stops a
-  // stray `STOCK_DATA_MODE=mock` from shipping fake prices to real users; it is
-  // a startup error, surfaced like any other invalid env value.
+  // Cross-field guards for production. These are startup errors, surfaced like
+  // any other invalid env value (variable name + message only, never the value).
   .superRefine((env, ctx) => {
-    if (env.NODE_ENV === "production" && env.STOCK_DATA_MODE === "mock") {
+    if (env.NODE_ENV !== "production") {
+      return;
+    }
+    // Never run the mock provider in production: a stray `STOCK_DATA_MODE=mock`
+    // must not ship fake prices to real users.
+    if (env.STOCK_DATA_MODE === "mock") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["STOCK_DATA_MODE"],
         message: "mock data mode is not allowed when NODE_ENV=production.",
       });
     }
+    // The SPA is served from a different origin in production, so an explicit
+    // CORS allow-list is mandatory — the dev fallback origin is not added in
+    // production, and `*` is never used. An empty list would reject the real SPA.
+    if (env.ALLOWED_ORIGINS.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ALLOWED_ORIGINS"],
+        message: "ALLOWED_ORIGINS must list at least one origin when NODE_ENV=production.",
+      });
+    }
+    // NOTE: a missing ALPHA_VANTAGE_API_KEY in live mode is intentionally NOT a
+    // startup failure — the app still boots and `/api/ready` reports not_ready
+    // (and stock requests return 503 API_KEY_MISSING) so the key can be supplied
+    // without a crash loop. See routes/ready.ts.
   });
 
 export type Env = z.infer<typeof envSchema>;

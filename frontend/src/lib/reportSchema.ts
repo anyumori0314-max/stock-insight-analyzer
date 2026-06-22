@@ -7,7 +7,7 @@ import { isRealIsoDate, isRealIsoDateTimeUtc, isRealProviderTimestamp } from "./
  * casts `response.json()` straight to `StockReport`; it parses through this
  * schema so a malformed payload becomes a safe UI error instead of corrupt
  * state. Mirrors `backend/src/schemas/report.ts` — including `.strict()` (no
- * unknown fields), a required `source`, the `"100d"` range literal, and
+ * unknown fields), a required `source`, the supported range enum, and
  * real-calendar date/time validation.
  */
 
@@ -79,8 +79,9 @@ export const stockReportSchema = z
     ticker: z.string().min(1),
     // Required (no default): a missing source is a contract violation.
     source: z.enum(["live", "mock"]),
-    // MVP supports only the compact ~100-day window.
-    range: z.literal("100d"),
+    // One of the supported analysis windows (mirrors the backend enum:
+    // compact feed backs only 1m / 3m).
+    range: z.enum(["1m", "3m"]),
     currency: z.string().nullable(),
     timezone: z.string().nullable(),
     lastRefreshed: realProviderTimestamp.nullable(),

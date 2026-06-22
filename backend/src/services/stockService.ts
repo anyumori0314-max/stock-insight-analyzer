@@ -3,26 +3,31 @@ import { stockReportSchema } from "../schemas/report";
 import { errorFor } from "../types/errors";
 import type { StockReport } from "../types/report";
 import {
-  createAlphaVantageClient,
   DEFAULT_RANGE,
-  type AlphaVantageClient,
-} from "./alphaVantageClient";
+  RANGE_LABEL,
+  RANGE_TRADING_DAYS,
+  type StockDataMode,
+  type StockRange,
+  type StockTimeSeries,
+} from "../types/stock";
+import { createAlphaVantageClient, type AlphaVantageClient } from "./alphaVantageClient";
 import { createMockStockDataProvider } from "./mockStockDataProvider";
+import type { StockReportRepository } from "./reportRepository";
 import { createTtlCache, type TtlCache } from "./ttlCache";
 
 /** Daily bars only change after the close, so a multi-hour TTL is safe. */
 const DEFAULT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
-export type StockDataMode = "live" | "mock";
+export type { StockDataMode };
 
 export interface StockService {
   /**
-   * Returns the analyzed report for a (already validated) ticker. The range is
-   * fixed to the MVP's single window (`"100d"`); no range argument is accepted,
-   * so an unsupported range can never reach the provider or the cache.
+   * Returns the analyzed report for an (already validated) ticker and window.
+   * The compact provider series is sliced to the window's trailing N trading
+   * days, so `1m` and `3m` return genuinely different periods from one fetch.
    */
-  getReport(ticker: string): Promise<StockReport>;
+  getReport(ticker: string, range?: StockRange): Promise<StockReport>;
 }
 
 export interface StockServiceOptions {
@@ -38,8 +43,10 @@ export interface StockServiceOptions {
   dataMode?: StockDataMode;
   /** Pre-built client (tests inject a fake; avoids network + real key). */
   client?: AlphaVantageClient;
-  /** Pre-built cache (tests inject one with a controllable clock). */
+  /** Pre-built in-memory cache (tests inject one with a controllable clock). */
   cache?: TtlCache<StockReport>;
+  /** Optional persistent (disk) cache forming the second cache layer. */
+  reportRepository?: StockReportRepository;
   cacheTtlMs?: number;
   cacheMaxEntries?: number;
   /** Outbound per-request timeout, forwarded when building the default client. */
@@ -48,8 +55,31 @@ export interface StockServiceOptions {
   maxPoints?: number;
 }
 
-function cacheKey(ticker: string, range: string): string {
+function cacheKey(ticker: string, range: StockRange): string {
   return `${ticker}:${range}`;
+}
+
+/**
+ * Slices a full compact series to the requested window's trailing N trading days.
+ *
+ * The compact feed is ~100 bars, so the supported windows (`1m` ~21d, `3m` ~63d)
+ * are fully covered and yield genuinely different periods. Should a provider ever
+ * return fewer bars than the window needs, we serve what is available with an
+ * explicit, non-fatal warning — never a fabricated extension. Metrics are then
+ * computed over exactly this window, so the indicators always match the displayed
+ * period. Exported for unit testing.
+ */
+export function sliceSeriesToRange(series: StockTimeSeries, range: StockRange): StockTimeSeries {
+  const want = RANGE_TRADING_DAYS[range];
+  const available = series.bars.length;
+  const bars = available > want ? series.bars.slice(available - want) : series.bars;
+  const warnings = [...series.warnings];
+  if (available < want) {
+    warnings.push(
+      `選択した期間（${RANGE_LABEL[range]}＝約${want}営業日）に対し、利用可能な履歴は${available}営業日です。取得できた範囲で表示しています。`
+    );
+  }
+  return { ...series, range, bars, warnings };
 }
 
 /**
@@ -57,14 +87,13 @@ function cacheKey(ticker: string, range: string): string {
  *
  * This is the last line of defense: it guarantees the response matches the
  * documented contract (no NaN/Infinity, no missing fields, valid cache metadata
- * / source / priceBasis). A failure is converted to a safe, generic
+ * / source / priceBasis / range). A failure is converted to a safe, generic
  * `PROVIDER_RESPONSE_INVALID` — internal schema details are never exposed (in
  * development OR production). Exported for direct unit testing.
  */
 export function assertPublicReport(report: StockReport): StockReport {
   const parsed = stockReportSchema.safeParse(report);
   if (!parsed.success) {
-    // Internal schema details / field names / stacks are never surfaced.
     throw errorFor("PROVIDER_RESPONSE_INVALID", "public-schema");
   }
   // Return the VALIDATED, stripped value (strict schema => exactly the public
@@ -76,8 +105,13 @@ export function assertPublicReport(report: StockReport): StockReport {
  * Returns a fresh report object with cache + source metadata stamped in, then
  * validates it. A new top-level object is built every call (the cached value is
  * never mutated), so a cache hit cannot be corrupted by a later request.
+ *
+ * `source` is supplied explicitly: for a fresh fetch / memory hit it is the
+ * active data mode, but for a PERSISTENT hit it is the report's OWN stored source,
+ * which must never be overwritten with the current mode (that is what would let a
+ * mock-saved report be re-published as live).
  */
-function withMeta(
+function stampReport(
   report: StockReport,
   hit: boolean,
   expiresAtMs: number,
@@ -92,19 +126,28 @@ function withMeta(
 }
 
 /**
- * Orchestrates the stock data flow:
- *   - cache hit  -> serve immediately (no provider call), `cache.hit = true`.
- *   - in-flight  -> coalesce concurrent requests for the same key onto one
- *                   provider call (dedup map), so 10 simultaneous requests for
- *                   AAPL hit Alpha Vantage exactly once.
- *   - miss       -> fetch + analyze, stamp metadata, VALIDATE, then cache the
- *                   validated report and return that same object.
+ * Orchestrates the stock data flow with a TWO-LAYER cache (memory + optional
+ * persistent disk), keyed by `ticker:range`:
+ *   - memory hit     -> serve immediately, `cache.hit = true`.
+ *   - persistent hit -> re-validate with `assertPublicReport` BEFORE warming the
+ *                       memory layer; serve `hit = true` PRESERVING the stored
+ *                       `source`. An invalid or mode-mismatched entry is deleted
+ *                       from disk and falls through to a fresh fetch.
+ *   - in-flight      -> coalesce concurrent same-key requests onto one provider
+ *                       call (dedup map).
+ *   - miss           -> fetch compact series, slice to the window, analyze, stamp
+ *                       metadata, VALIDATE, then write BOTH cache layers and
+ *                       return the validated report.
  *
- * Only reports that pass the public-schema validation are cached: validation
- * happens BEFORE `cache.set`, so an invalid provider report is never stored (and
- * the next request re-fetches instead of serving a poisoned cache entry). Errors
- * (and the in-flight promise) are always cleared in `finally`, so a failure never
- * poisons the cache and the next request retries cleanly.
+ * The persistent layer is keyed by `ticker:range:dataMode`, so a `mock` entry is
+ * never served while running `live` (and vice-versa); the active mode is also
+ * re-checked against the stored `source` before serving. Only reports that pass
+ * public-schema validation are cached (validation happens BEFORE either
+ * `cache.set`), so an invalid report is never stored OR promoted from disk into
+ * memory. The persistent write is best-effort: a disk failure degrades to
+ * memory-only and never fails the request. Errors and the in-flight promise are
+ * always cleared in `finally`, so a failure never poisons the cache and the next
+ * request retries.
  */
 export function createStockService(options: StockServiceOptions = {}): StockService {
   const cache =
@@ -114,6 +157,7 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
       maxEntries: options.cacheMaxEntries ?? DEFAULT_CACHE_MAX_ENTRIES,
     });
 
+  const repository = options.reportRepository;
   const dataMode: StockDataMode = options.dataMode ?? "live";
 
   let client: AlphaVantageClient | undefined = options.client;
@@ -135,18 +179,43 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
   const inflight = new Map<string, Promise<StockReport>>();
 
   return {
-    async getReport(ticker: string): Promise<StockReport> {
+    async getReport(ticker: string, range: StockRange = DEFAULT_RANGE): Promise<StockReport> {
       if (!client) {
         throw errorFor("API_KEY_MISSING");
       }
 
-      // Range is fixed to the single supported window.
-      const range = DEFAULT_RANGE;
       const key = cacheKey(ticker, range);
 
+      // 1. Memory layer. Re-stamped + re-validated on every hit (strict schema).
       const cached = cache.getWithMeta(key);
       if (cached) {
-        return withMeta(cached.value, true, cached.expiresAt, dataMode);
+        return stampReport(cached.value, true, cached.expiresAt, dataMode);
+      }
+
+      // 2. Persistent layer. A disk entry is VALIDATED before it is allowed into
+      // the memory layer, and its stored `source` is preserved (never overwritten
+      // with the active mode) and re-checked against `dataMode`. An invalid or
+      // mismatched entry is deleted from disk and we fall through to a fresh fetch
+      // — never promoting a poisoned report into memory or serving it.
+      if (repository) {
+        const persisted = await repository.get(ticker, range, dataMode);
+        if (persisted) {
+          try {
+            const validated = stampReport(
+              persisted.report,
+              true,
+              persisted.expiresAtMs,
+              persisted.report.source
+            );
+            if (validated.source !== dataMode) {
+              throw errorFor("PROVIDER_RESPONSE_INVALID", "persistent-mode-mismatch");
+            }
+            cache.set(key, validated, persisted.expiresAtMs);
+            return validated;
+          } catch {
+            await repository.delete(ticker, range, dataMode);
+          }
+        }
       }
 
       const existing = inflight.get(key);
@@ -156,16 +225,28 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
       }
 
       const activeClient = client;
+      const activeRepository = repository;
       const promise = (async () => {
-        const series = await activeClient.fetchDailySeries(ticker, range);
-        const report = buildStockReport(series);
+        const fullSeries = await activeClient.fetchDailySeries(ticker, range);
+        const windowed = sliceSeriesToRange(fullSeries, range);
+        const report = buildStockReport(windowed);
         // Reserve the expiry this entry will receive, then stamp source + cache
         // metadata and VALIDATE the completed public report. An invalid report
-        // throws here — BEFORE `cache.set` — so it is never stored.
+        // throws here — BEFORE any `cache.set` — so it is never stored.
         const expiresAt = cache.peekExpiry();
-        const validated = withMeta(report, false, expiresAt, dataMode);
-        // Cache exactly the validated object, under the same expiry it carries.
+        const validated = stampReport(report, false, expiresAt, dataMode);
+        // Cache exactly the validated object in both layers (disk best-effort).
         cache.set(key, validated, expiresAt);
+        if (activeRepository) {
+          // Persistent write is best-effort: the memory layer already holds the
+          // report, so a repository failure must never fail the request. The
+          // active mode is stored so live and mock entries stay separated.
+          try {
+            await activeRepository.set(ticker, range, dataMode, validated, expiresAt);
+          } catch {
+            // Degrade to memory-only.
+          }
+        }
         return validated;
       })();
       inflight.set(key, promise);

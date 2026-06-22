@@ -5,7 +5,7 @@ export function makeReport(overrides: Partial<StockReport> = {}): StockReport {
   return {
     ticker: "AAPL",
     source: "live",
-    range: "100d",
+    range: "3m",
     currency: null,
     timezone: "US/Eastern",
     lastRefreshed: "2026-06-19",

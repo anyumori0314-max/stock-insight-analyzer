@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import { changeDirection, formatNumber, formatPercent, formatPrice } from "../lib/format";
 import type { ReportState } from "../hooks/useStockReports";
 import type { TrendVerdict } from "../types/stock";
@@ -17,7 +19,12 @@ const TREND_TEXT: Record<TrendVerdict, string> = {
   unknown: "—",
 };
 
-export function ComparisonTable({
+/**
+ * Memoized: with the callbacks below stabilized in `App` (useCallback) and the
+ * selection arrays stable, the table only re-renders when the reports map, the
+ * selection or the active ticker actually change — not on unrelated state churn.
+ */
+export const ComparisonTable = memo(function ComparisonTable({
   tickers,
   reports,
   activeTicker,
@@ -129,4 +136,4 @@ export function ComparisonTable({
       </table>
     </div>
   );
-}
+});

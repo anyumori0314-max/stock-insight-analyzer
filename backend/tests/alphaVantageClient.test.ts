@@ -92,7 +92,7 @@ describe("alphaVantageClient — success & normalization", () => {
     const series = await makeClient(fetchReturning(payload)).fetchDailySeries("IBM");
 
     expect(series.ticker).toBe("IBM");
-    expect(series.range).toBe("100d");
+    expect(series.range).toBe("3m"); // default window when none is requested
     expect(series.currency).toBeNull();
     expect(series.priceBasis).toBe("close");
     expect(series.timezone).toBe("US/Eastern");

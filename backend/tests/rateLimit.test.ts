@@ -10,7 +10,7 @@ import type { StockReport } from "../src/types/report";
 const okReport: StockReport = {
   ticker: "AAPL",
   source: "live",
-  range: "100d",
+  range: "3m",
   currency: null,
   timezone: "US/Eastern",
   lastRefreshed: "2026-06-19",

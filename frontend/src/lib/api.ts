@@ -1,3 +1,4 @@
+import { DEFAULT_RANGE, type StockRange } from "./ranges";
 import { stockReportSchema } from "./reportSchema";
 import type { ApiErrorBody, StockReport } from "../types/stock";
 
@@ -35,6 +36,8 @@ export function friendlyMessage(code: string, status: number): string {
   switch (code) {
     case "INVALID_TICKER":
       return "ティッカーの形式が正しくありません。";
+    case "INVALID_RANGE":
+      return "選択した期間はサポートされていません。";
     case "SYMBOL_NOT_FOUND":
       return "該当する銘柄のデータが見つかりませんでした。";
     case "INSUFFICIENT_DATA":
@@ -77,9 +80,10 @@ export function friendlyMessage(code: string, status: number): string {
  */
 export async function fetchStockReport(
   ticker: string,
+  range: StockRange = DEFAULT_RANGE,
   signal?: AbortSignal
 ): Promise<StockReport> {
-  const url = `${API_BASE}/api/stock/${encodeURIComponent(ticker)}`;
+  const url = `${API_BASE}/api/stock/${encodeURIComponent(ticker)}?range=${encodeURIComponent(range)}`;
 
   const controller = new AbortController();
   let timedOut = false;

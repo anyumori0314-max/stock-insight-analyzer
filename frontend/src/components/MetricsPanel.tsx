@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import {
   changeDirection,
   directionLabel,
@@ -36,7 +38,7 @@ function MetricCard({
   );
 }
 
-export function MetricsPanel({ metrics, currency }: MetricsPanelProps) {
+export const MetricsPanel = memo(function MetricsPanel({ metrics, currency }: MetricsPanelProps) {
   // No currency from TIME_SERIES_DAILY -> say so rather than implying USD.
   const currencyNote = currency ? `（${currency}）` : "（通貨不明 / raw close）";
 
@@ -75,4 +77,4 @@ export function MetricsPanel({ metrics, currency }: MetricsPanelProps) {
       <MetricCard label="最大下落率" value={formatPercent(metrics.maxDrawdownPercent)} />
     </div>
   );
-}
+});

@@ -4,14 +4,15 @@ import { buildTestApp } from "./helpers";
 import { tickerSchema } from "../src/schemas/stock";
 import { stockReportSchema } from "../src/schemas/report";
 import type { StockReport } from "../src/types/report";
+import type { StockRange } from "../src/types/stock";
 import type { StockService } from "../src/services/stockService";
 
 /** Minimal contract-valid report stub. */
-function makeReport(ticker: string): StockReport {
+function makeReport(ticker: string, range: StockRange = "3m"): StockReport {
   return {
     ticker,
     source: "live",
-    range: "100d",
+    range,
     currency: null,
     timezone: "US/Eastern",
     lastRefreshed: "2026-06-19",
@@ -47,7 +48,7 @@ describe("GET /api/stock/:ticker", () => {
   });
 
   it("returns 200 with a contract-valid report (service injected)", async () => {
-    const getReport = vi.fn(async (ticker: string) => makeReport(ticker));
+    const getReport = vi.fn(async (ticker: string, range?: StockRange) => makeReport(ticker, range));
     const app = buildTestApp({ stockService: { getReport } });
 
     const res = await request(app).get("/api/stock/AAPL");
@@ -56,17 +57,51 @@ describe("GET /api/stock/:ticker", () => {
     expect(res.body.ticker).toBe("AAPL");
     expect(res.body.metrics.currentPrice).toBe(104);
     expect(stockReportSchema.safeParse(res.body).success).toBe(true);
-    expect(getReport).toHaveBeenCalledWith("AAPL");
+    expect(getReport).toHaveBeenCalledWith("AAPL", "3m");
   });
 
   it("normalizes a lowercase ticker before calling the service", async () => {
-    const getReport = vi.fn(async (ticker: string) => makeReport(ticker));
+    const getReport = vi.fn(async (ticker: string, range?: StockRange) => makeReport(ticker, range));
     const app = buildTestApp({ stockService: { getReport } });
 
     const res = await request(app).get("/api/stock/aapl");
 
     expect(res.status).toBe(200);
-    expect(getReport).toHaveBeenCalledWith("AAPL");
+    expect(getReport).toHaveBeenCalledWith("AAPL", "3m");
+  });
+
+  it("passes a supported ?range= through and reflects it in the report", async () => {
+    const getReport = vi.fn(async (ticker: string, range?: StockRange) => makeReport(ticker, range));
+    const app = buildTestApp({ stockService: { getReport } });
+
+    const res = await request(app).get("/api/stock/AAPL?range=1m");
+
+    expect(res.status).toBe(200);
+    expect(getReport).toHaveBeenCalledWith("AAPL", "1m");
+    expect(res.body.range).toBe("1m");
+  });
+
+  it("rejects an unsupported ?range= with 400 INVALID_RANGE", async () => {
+    const getReport = vi.fn(async (ticker: string, range?: StockRange) => makeReport(ticker, range));
+    const app = buildTestApp({ stockService: { getReport } });
+
+    const res = await request(app).get("/api/stock/AAPL?range=2y");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("INVALID_RANGE");
+    expect(getReport).not.toHaveBeenCalled();
+  });
+
+  it("rejects the now-unsupported 6m / 1y windows with 400 INVALID_RANGE (never fetched)", async () => {
+    const getReport = vi.fn(async (ticker: string, range?: StockRange) => makeReport(ticker, range));
+    const app = buildTestApp({ stockService: { getReport } });
+
+    for (const range of ["6m", "1y"]) {
+      const res = await request(app).get(`/api/stock/AAPL?range=${range}`);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_RANGE");
+    }
+    expect(getReport).not.toHaveBeenCalled();
   });
 
   it("rejects empty / whitespace ticker with 400 INVALID_TICKER", async () => {

@@ -4,19 +4,21 @@ import {
 } from "../schemas/alphaVantage";
 import { ApiError, errorFor } from "../types/errors";
 import { isRealIsoDate } from "../utils/dates";
-import { SUPPORTED_RANGE, type DailyBar, type StockRange, type StockTimeSeries } from "../types/stock";
+import { DEFAULT_RANGE, type DailyBar, type StockRange, type StockTimeSeries } from "../types/stock";
 import { classifyProviderMessage } from "./providerErrorClassifier";
 
 const DEFAULT_BASE_URL = "https://www.alphavantage.co/query";
 const DEFAULT_TIMEOUT_MS = 8_000;
 
+// Re-export so existing importers (mock provider, service) keep one import site.
+export { DEFAULT_RANGE };
+
 /**
- * Logical default (and currently only) window. `outputsize=compact` returns the
- * latest ~100 trading days. Range is part of the cache key, so adding more
- * windows later means adding both the fetch param and the enum — we never accept
- * a range we do not actually fetch/slice for.
+ * The wire request is ALWAYS `outputsize=compact` (latest ~100 trading days),
+ * regardless of the requested logical window. The client returns the full
+ * compact series stamped with `range`; the SERVICE slices it to the window's
+ * trailing N bars. We never claim to fetch more history than compact provides.
  */
-export const DEFAULT_RANGE: StockRange = SUPPORTED_RANGE;
 
 /**
  * Default hard cap on accepted daily points. `compact` is ~100; this leaves

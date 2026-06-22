@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Stock Insight Analyzer">
+  <rect width="32" height="32" rx="6" fill="#0b1020" />
+  <polyline
+    points="4,22 12,16 18,19 28,7"
+    fill="none"
+    stroke="#4f8cff"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="28" cy="7" r="2.4" fill="#2fbf71" />
+</svg>

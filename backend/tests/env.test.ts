@@ -15,8 +15,14 @@ describe("loadEnv — valid input", () => {
     expect(env.ALPHA_VANTAGE_API_KEY).toBeUndefined();
   });
 
-  it("loads Phase 1 successfully without an Alpha Vantage API key", () => {
-    const env = loadEnv({ NODE_ENV: "production", ALPHA_VANTAGE_API_KEY: "" });
+  it("boots in production without an Alpha Vantage API key (readiness flags it later)", () => {
+    // A missing key is NOT a startup failure — the app boots and /api/ready
+    // reports not_ready. ALLOWED_ORIGINS is required in production, so it is set.
+    const env = loadEnv({
+      NODE_ENV: "production",
+      ALLOWED_ORIGINS: "https://app.example",
+      ALPHA_VANTAGE_API_KEY: "",
+    });
     expect(env.ALPHA_VANTAGE_API_KEY).toBeUndefined();
   });
 
@@ -102,9 +108,27 @@ describe("loadEnv — invalid input is rejected at startup", () => {
   });
 
   it("rejects mock data mode in production", () => {
-    expect(() => loadEnv({ NODE_ENV: "production", STOCK_DATA_MODE: "mock" })).toThrow(
-      /Invalid environment variables/
-    );
+    expect(() =>
+      loadEnv({ NODE_ENV: "production", STOCK_DATA_MODE: "mock", ALLOWED_ORIGINS: "https://app.example" })
+    ).toThrow(/Invalid environment variables/);
+  });
+
+  it("rejects production with no ALLOWED_ORIGINS", () => {
+    expect(() => loadEnv({ NODE_ENV: "production" })).toThrow(/Invalid environment variables/);
+    // The failure names the offending variable (and never a secret value).
+    expect(() => loadEnv({ NODE_ENV: "production" })).toThrow(/ALLOWED_ORIGINS/);
+  });
+
+  it("accepts production once ALLOWED_ORIGINS is configured (live by default)", () => {
+    const env = loadEnv({ NODE_ENV: "production", ALLOWED_ORIGINS: "https://app.example" });
+    expect(env.NODE_ENV).toBe("production");
+    expect(env.ALLOWED_ORIGINS).toEqual(["https://app.example"]);
+    expect(env.STOCK_DATA_MODE).toBe("live");
+  });
+
+  it("does not require ALLOWED_ORIGINS outside production", () => {
+    expect(() => loadEnv({ NODE_ENV: "development" })).not.toThrow();
+    expect(() => loadEnv({ NODE_ENV: "test", STOCK_DATA_MODE: "mock" })).not.toThrow();
   });
 });
 
