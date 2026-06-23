@@ -74,11 +74,31 @@ export const cacheMetadataSchema = z
   })
   .strict();
 
+/**
+ * Safe data-provenance / freshness metadata (Phase 15). MUST mirror
+ * `backend/src/schemas/report.ts` exactly (strict, same fields, same nullability).
+ */
+export const dataStatusSchema = z
+  .object({
+    dataMode: z.enum(["live", "mock", "historical", "hybrid"]),
+    dataSource: z.enum(["mock", "sqlite", "csv", "api"]),
+    latestTradeDate: realIsoDate.nullable(),
+    lastUpdatedAt: realIsoDateTime.nullable(),
+    csvImportedAt: realIsoDateTime.nullable(),
+    apiSyncedAt: realIsoDateTime.nullable(),
+    persistent: z.boolean(),
+    stale: z.boolean(),
+    fallbackUsed: z.boolean(),
+    recordCount: z.number().int().min(0),
+  })
+  .strict();
+
 export const stockReportSchema = z
   .object({
     ticker: z.string().min(1),
-    // Required (no default): a missing source is a contract violation.
-    source: z.enum(["live", "mock"]),
+    // Required (no default): a missing source is a contract violation. Mirrors the
+    // backend's four data-serving modes.
+    source: z.enum(["live", "mock", "historical", "hybrid"]),
     // One of the supported analysis windows (mirrors the backend enum:
     // compact feed backs only 1m / 3m).
     range: z.enum(["1m", "3m"]),
@@ -91,6 +111,8 @@ export const stockReportSchema = z
     analysis: stockAnalysisSchema,
     warnings: z.array(z.string()),
     cache: cacheMetadataSchema,
+    // Optional so existing fixtures and the Phase 2–11 contract stay valid.
+    dataStatus: dataStatusSchema.optional(),
     disclaimer: z.string().min(1),
   })
   .strict();

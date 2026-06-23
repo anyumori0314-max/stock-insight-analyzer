@@ -1,4 +1,21 @@
-import type { StockReport } from "../types/stock";
+import type { DataStatus, StockReport } from "../types/stock";
+
+/** Builds a contract-valid data-status metadata block for Phase 15 tests. */
+export function makeDataStatus(overrides: Partial<DataStatus> = {}): DataStatus {
+  return {
+    dataMode: "historical",
+    dataSource: "sqlite",
+    latestTradeDate: "2026-06-17",
+    lastUpdatedAt: "2026-06-23T12:00:00.000Z",
+    csvImportedAt: null,
+    apiSyncedAt: null,
+    persistent: true,
+    stale: false,
+    fallbackUsed: false,
+    recordCount: 63,
+    ...overrides,
+  };
+}
 
 /** Builds a contract-valid report for use in component/hook/API tests. */
 export function makeReport(overrides: Partial<StockReport> = {}): StockReport {

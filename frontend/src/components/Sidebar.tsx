@@ -95,9 +95,15 @@ export function Sidebar({ selected, onAdd, onRemove }: SidebarProps) {
               追加
             </button>
           </div>
-          <p className="field-error" role="alert">
-            {error}
-          </p>
+          {/* Render the alert ONLY when there is a message. An always-present
+              empty role="alert" is announced as a spurious live region by some
+              assistive tech; inserting the element only on error still triggers
+              an immediate announcement, and removing it on recovery clears it. */}
+          {error && (
+            <p className="field-error" role="alert">
+              {error}
+            </p>
+          )}
         </form>
       </section>
     </aside>

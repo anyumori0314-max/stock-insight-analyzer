@@ -2,7 +2,7 @@
 
 FANG+ や個別の米国株について、Alpha Vantage の日次株価データを取得し、テクニカル指標とルールベースの分析を**ダッシュボード形式で可視化する参考ツール**です。
 
-> **開発状況**: バックエンド API 基盤（Phase 1）、Alpha Vantage 連携・テクニカル指標・チャート/比較表示・分析コメント（Phase 2〜6）に加え、公開に向けた基盤強化（Phase 7〜11）まで実装済みです。具体的には、複数期間の切替（**1か月 / 3か月**）、メモリ＋ディスクの 2 層キャッシュ（live/mock を厳密に分離）、構造化ログ・相関 ID、`/api/health`（liveness）/`/api/ready`（readiness）、グレースフルシャットダウン、Recharts の遅延ロード、アクセシビリティ強化を含みます。`GET /api/stock/:ticker` は日次データを取得・分析した JSON を返します（API キー未設定時は `503 API_KEY_MISSING`）。
+> **開発状況**: バックエンド API 基盤（Phase 1）、Alpha Vantage 連携・テクニカル指標・チャート/比較表示・分析コメント（Phase 2〜6）、公開に向けた基盤強化（Phase 7〜11）、さらに **CSV/SQLite 履歴データ基盤・不足営業日の API 補完・日次バッチ・データ状態表示（Phase 12〜15）** まで実装済みです。具体的には、複数期間の切替（**1か月 / 3か月**）、メモリ＋ディスクの 2 層キャッシュ（live/mock を厳密に分離）、構造化ログ・相関 ID、`/api/health`（liveness）/`/api/ready`（readiness）、グレースフルシャットダウン、Recharts の遅延ロード、アクセシビリティ強化を含みます。`GET /api/stock/:ticker` は日次データを取得・分析した JSON を返します（API キー未設定時は `503 API_KEY_MISSING`）。
 >
 > **対応期間について**: 無料の `TIME_SERIES_DAILY`（`outputsize=compact`）は直近約 100 営業日しか返さないため、誠実に裏付けできる **1か月（約21営業日）/ 3か月（約63営業日）のみ**を提供します。**6か月・1年は未対応**で、UI には表示されず、API も `400 INVALID_RANGE` で拒否します（同じ約100営業日を「6か月/1年」と偽って返すことはしません）。6か月・1年の本対応は `outputsize=full` を使う将来の変更として明示的に保留しています。
 
@@ -16,11 +16,11 @@ FANG+ や個別の米国株について、Alpha Vantage の日次株価データ
 | バックエンド | Express 5 + TypeScript / zod |
 | 株価データ | Alpha Vantage API（`TIME_SERIES_DAILY`） |
 | テスト | Vitest（backend / frontend）+ Supertest + React Testing Library |
-| ランタイム | Node.js 20.19+ |
+| ランタイム | Node.js 22.5+ |
 
 ## 必要環境
 
-- Node.js **20.19 以上**（Vite 6 / Vitest 4 の要件）
+- Node.js **22.5 以上**（`historical` / `hybrid` と CSV 取込・日次バッチが標準の `node:sqlite` を使い、これが Node ≥ 22.5 を要求するため。Vite 6 / Vitest 4 の要件も満たします）
 - npm 10 以上
 - Alpha Vantage API キー（[無料取得](https://www.alphavantage.co/support/#api-key)）。**バックエンドにのみ**設定します。
 
@@ -41,13 +41,20 @@ npm.cmd run install:all      # Windows PowerShell
 | `PORT` | バックエンドのポート（1〜65535） | `3001` |
 | `TRUST_PROXY` | 信頼するリバースプロキシ hop 数（0〜10）。`0` は `X-Forwarded-For` を無視。実段数を超えて設定しない | `0` |
 | `ALLOWED_ORIGINS` | 追加で許可する CORS オリジン（カンマ区切り、`*` 不可）。本番以外は `http://localhost:5173` を常に許可。**`production` では必須**（未設定は起動失敗） | 空 |
-| `STOCK_DATA_MODE` | データ取得元（`live` / `mock`）。`mock` は外部通信せず決定的なダミーデータを返す（本番では `mock` を起動時に拒否） | `live` |
+| `STOCK_DATA_MODE` | データ取得元（`live` / `mock` / `historical` / `hybrid`）。`mock`=外部通信なしの決定的ダミー、`historical`=SQLite のみ、`hybrid`=SQLite 優先＋不足時のみ API 補完（失敗時は保存データへフォールバック）。`mock` は本番では起動時に拒否。`historical` / `hybrid` は Node ≥ 22.5 が必要 | `live` |
 | `ALPHA_VANTAGE_API_KEY` | Alpha Vantage の API キー。**バックエンドのみ**で使用（`live` モード時のみ）。`live` で未設定でも起動はするが、`/api/ready` が `not_ready` を返し、株価リクエストは `503 API_KEY_MISSING` になる | 空 |
 | `ALPHA_VANTAGE_TIMEOUT_MS` | 外部リクエストのタイムアウト（1000〜30000 ms） | `8000` |
 | `ALPHA_VANTAGE_MAX_POINTS` | Alpha Vantage レスポンスから処理する最大時系列件数（1〜10000 の整数）。超過は `PROVIDER_RESPONSE_INVALID`（黙って切り捨てない）。不正値・小数・範囲外は起動時に拒否 | `120` |
 | `STOCK_CACHE_MAX_ENTRIES` | キャッシュ最大件数（正整数）。メモリ層・ディスク層の両方に適用、LRU eviction | `100` |
 | `STOCK_CACHE_TTL_SECONDS` | キャッシュ TTL（**秒**、1〜86400）。日次バーは引け後のみ更新されるため数時間で十分 | `21600`（6時間） |
 | `STOCK_CACHE_DIR` | 永続（ディスク）キャッシュの保存先。検証済みの公開 `StockReport` のみを `ticker:range:dataMode` 単位で保存（API キーや生レスポンスは保存しない）。相対パスは CWD 起点。本番は書込可能な永続ボリュームへ。書込不可ならメモリのみへ自動降格 | `.cache/stock-reports` |
+| `STOCK_DB_PATH` | SQLite 履歴 DB のパス（履歴株価の正本）。既定は git 無視の `.cache/` 配下。DB と `-wal`/`-shm` は git 無視。`historical`/`hybrid` と データ CLI で使用（Node ≥ 22.5） | `.cache/stock-data/history.sqlite` |
+| `STOCK_CSV_DIRECTORY` | 日次ジョブが取込対象とする CSV ディレクトリ（任意。空=CSV 取込なし） | 空 |
+| `STOCK_SYNC_TICKERS` | 日次ジョブが同期する既定ティッカー（カンマ区切り、任意） | 空 |
+| `STOCK_STALE_AFTER_HOURS` | 最新バーからこの時間を超えると「stale」表示＆同日再同期を許可（1〜168） | `24` |
+| `STOCK_IMPORT_MAX_ROWS` | CSV 1 取込あたりの最大データ行数（正整数） | `100000` |
+| `STOCK_IMPORT_MAX_BYTES` | CSV 1 取込あたりの最大バイト数（正整数） | `5000000` |
+| `STOCK_DAILY_LOCK_TIMEOUT_SECONDS` | 日次ジョブの lock がこの秒数を過ぎると stale 扱いで再取得可能（異常終了で永久 lock が残らない、60〜86400） | `3600` |
 
 > **本番（`NODE_ENV=production`）で必須の設定**: `ALLOWED_ORIGINS`（未設定は**起動失敗**）。`STOCK_DATA_MODE=mock` は**起動失敗**。`live` で `ALPHA_VANTAGE_API_KEY` 未設定の場合は起動はするが `/api/ready` が `not_ready`（503）を返す。フロントエンドは別オリジン配信のため `VITE_API_BASE_URL` も実質必須。
 
@@ -220,6 +227,9 @@ npm run test:frontend   # frontend（Vitest + React Testing Library, jsdom）
 | `start:backend` | backend ビルド成果物を起動 |
 | `typecheck` | frontend + backend 型チェック |
 | `test:run` / `test:backend` / `test:frontend` | テスト実行（外部通信なし） |
+| `data:import -- --file "<CSV>"` | CSV を検証して SQLite へ冪等に取込（Node ≥ 22.5） |
+| `data:import -- --directory "<DIR>"` | ディレクトリ内の `*.csv` を一括取込 |
+| `data:daily [-- --csv-directory "<DIR>" --tickers "AAPL,MSFT"]` | 日次バッチ（二重起動防止・CSV 取込・API 補完） |
 
 ## 本番配信時のセキュリティヘッダ（フロントエンド）
 
@@ -236,17 +246,30 @@ backend は **JSON 専用 API**（CSP `default-src 'none'`）で、SPA の HTML 
 - **Netlify** (`netlify.toml` の `[[headers]]`) / **Vercel** (`vercel.json` の `headers`): 同等のキーを `for = "/*"` に対して設定。
 - **CDN（CloudFront 等）**: Response Headers Policy で同等のヘッダを付与。
 
+## 履歴データ基盤（Phase 12〜15）
+
+CSV で取得した過去の日足を検証して **SQLite（履歴株価の正本）** へ冪等に保存し、必要なときだけ不足営業日を API で補完する基盤です。詳細は **[docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md)**（データフロー・スキーマ・障害復旧）と **[docs/CSV_FORMAT.md](docs/CSV_FORMAT.md)**（CSV 仕様）を参照してください。
+
+- **データモード**: `mock`（外部通信 0・DB なし）/ `historical`（SQLite のみ・外部通信 0）/ `hybrid`（SQLite 優先＋不足時のみ API 補完、失敗時は保存データへフォールバック）/ `live`（従来の直接取得）。
+- **API 通信が発生する条件**: `hybrid` で対象ティッカーを選択し、SQLite の最新営業日が直近の確定営業日より古く、かつ直近 `STOCK_STALE_AFTER_HOURS` に同期試行がない場合のみ、**ティッカー 1 件につき最大 1 回**。
+- **API 通信が発生しない条件**: 起動時・画面初期表示・`mock`/`historical`・SQLite が十分新しい・同日に試行済み・レート制限/タイムアウト後の再試行（自動再試行はしない）。
+- **Alpha Vantage は単一日取得ではありません**。日次 API は最新 ~100 営業日（compact）を返し、その中から **SQLite より新しい日付だけ**を保存します。
+- **SQLite ライブラリ**: Node 標準の `node:sqlite`（`DatabaseSync`）。ネイティブビルド不要で Windows ARM でも追加依存なしに動作します（**Node ≥ 22.5 が必要**、実験的 API のため起動時に ExperimentalWarning を出します）。
+
 ## 既知の制限
 
-- **ウォッチリストの永続化は未実装**（選択銘柄はリロードで失われます）。
+- **ウォッチリストの永続化は未実装**（選択銘柄はリロードで失われます。今回も対象外）。
 - **キャッシュの制限**: メモリ層は再起動で消えます。ディスク層は再起動後も再利用されますが、`STOCK_CACHE_DIR` が書込不可ならメモリのみで動作します。schema 変更時は旧エントリを読込時に無効化・削除します。
-- **mock データは完全な取引所カレンダーではありません**。決定的な開発用の営業日データであり、早朝引け・臨時休場などは厳密にはモデル化していません。
+- **mock / 営業日カレンダーは完全な取引所カレンダーではありません**。主要な全日休場のみをモデル化し、早朝引け・臨時休場は対象外です。最終的な最新日は Provider レスポンスの日付を正とします。
 - **対応期間は 1か月 / 3か月のみ**（6か月・1年は無料 compact フィードでは誠実に提供できないため未対応）。
+- **プロジェクト全体の要件は Node ≥ 22.5**。`historical` / `hybrid` と データ CLI（CSV 取込・日次バッチ）が標準の `node:sqlite` を使うため、`engines.node` を root / backend / frontend で `>=22.5.0` に統一しています。`mock` / `live` のコードパス自体は Node ≥ 20.19 でも動作しますが（`node:sqlite` を遅延ロードするため）、公開・運用時はリポジトリ統一要件の Node ≥ 22.5 を満たしてください。
+- **`hybrid` の API 補完は ≥ 直近 1 日のギャップ補填**で、最新より過去の歯抜けは日次取込の対象外です（履歴の書き換えを避けるため）。
 
-## 今後の作業
+## 今後の作業（Phase 16 以降・未着手）
 
 - 6か月・1年の本対応（`outputsize=full` の採用検討）
 - ウォッチリストの localStorage 永続化
+- 過去日の歯抜け補填（バックフィル）と複数プロバイダ対応
 - CI（GitHub Actions）整備
 
 ## ライセンス

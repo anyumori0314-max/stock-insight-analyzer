@@ -1,5 +1,9 @@
 import { type AlphaVantageClient } from "./alphaVantageClient";
+import { isUsMarketHoliday } from "../utils/marketCalendar";
 import { DEFAULT_RANGE, type DailyBar, type StockRange, type StockTimeSeries } from "../types/stock";
+
+// Re-exported so existing importers (and tests) keep a single import site.
+export { isUsMarketHoliday };
 
 /**
  * Deterministic, fully in-process stock data provider for local development.
@@ -32,87 +36,6 @@ export const MOCK_ANCHOR_DATE = "2026-06-17"; // Wednesday, a normal trading day
 
 function isoUtc(date: Date): string {
   return date.toISOString().slice(0, 10);
-}
-
-/** Easter Sunday (Gregorian) via the anonymous Meeus/Jones/Butcher algorithm. */
-function easterSunday(year: number): Date {
-  const a = year % 19;
-  const b = Math.floor(year / 100);
-  const c = year % 100;
-  const d = Math.floor(b / 4);
-  const e = b % 4;
-  const f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4);
-  const k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const month = Math.floor((h + l - 7 * m + 114) / 31); // 3 = March, 4 = April
-  const day = ((h + l - 7 * m + 114) % 31) + 1;
-  return new Date(Date.UTC(year, month - 1, day));
-}
-
-/** The `n`-th `weekday` (0=Sun) of a month, e.g. 3rd Monday of January. */
-function nthWeekdayOfMonth(year: number, month: number, weekday: number, n: number): Date {
-  const first = new Date(Date.UTC(year, month, 1));
-  const offset = (7 + weekday - first.getUTCDay()) % 7;
-  return new Date(Date.UTC(year, month, 1 + offset + (n - 1) * 7));
-}
-
-/** The last `weekday` (0=Sun) of a month, e.g. last Monday of May. */
-function lastWeekdayOfMonth(year: number, month: number, weekday: number): Date {
-  const last = new Date(Date.UTC(year, month + 1, 0));
-  const offset = (7 + last.getUTCDay() - weekday) % 7;
-  return new Date(Date.UTC(year, month, last.getUTCDate() - offset));
-}
-
-/** Observed date for a fixed-date holiday: Sat → preceding Fri, Sun → following Mon. */
-function observedFixed(year: number, month: number, day: number): Date {
-  const d = new Date(Date.UTC(year, month, day));
-  const dow = d.getUTCDay();
-  if (dow === 6) d.setUTCDate(day - 1);
-  else if (dow === 0) d.setUTCDate(day + 1);
-  return d;
-}
-
-const holidayCache = new Map<number, Set<string>>();
-
-/**
- * The major US equity-market closures for a year (NYSE/Nasdaq full-day
- * holidays). Deliberately small and dependency-free — enough to keep the
- * deterministic development series off well-known closed days. It is NOT a
- * complete trading calendar: early closes and ad-hoc closures are not modeled.
- */
-function usMarketHolidays(year: number): Set<string> {
-  const cached = holidayCache.get(year);
-  if (cached) return cached;
-
-  const set = new Set<string>([
-    // Fixed-date federal holidays (with weekend observance).
-    isoUtc(observedFixed(year, 0, 1)), // New Year's Day
-    isoUtc(observedFixed(year, 5, 19)), // Juneteenth
-    isoUtc(observedFixed(year, 6, 4)), // Independence Day
-    isoUtc(observedFixed(year, 11, 25)), // Christmas
-    // Floating Monday/Thursday holidays.
-    isoUtc(nthWeekdayOfMonth(year, 0, 1, 3)), // MLK Day (3rd Mon Jan)
-    isoUtc(nthWeekdayOfMonth(year, 1, 1, 3)), // Presidents' Day (3rd Mon Feb)
-    isoUtc(lastWeekdayOfMonth(year, 4, 1)), // Memorial Day (last Mon May)
-    isoUtc(nthWeekdayOfMonth(year, 8, 1, 1)), // Labor Day (1st Mon Sep)
-    isoUtc(nthWeekdayOfMonth(year, 10, 4, 4)), // Thanksgiving (4th Thu Nov)
-  ]);
-  // Good Friday: the Friday before Easter Sunday (a full market closure).
-  const goodFriday = easterSunday(year);
-  goodFriday.setUTCDate(goodFriday.getUTCDate() - 2);
-  set.add(isoUtc(goodFriday));
-
-  holidayCache.set(year, set);
-  return set;
-}
-
-/** True when `date` (UTC) is a known major US equity-market holiday. */
-export function isUsMarketHoliday(date: Date): boolean {
-  return usMarketHolidays(date.getUTCFullYear()).has(isoUtc(date));
 }
 
 /** FNV-1a style string hash → unsigned 32-bit seed. */

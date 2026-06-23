@@ -2,6 +2,7 @@ import type { z } from "zod";
 
 import type {
   cacheMetadataSchema,
+  dataStatusSchema,
   momentumVerdictSchema,
   riskVerdictSchema,
   stockAnalysisSchema,
@@ -23,6 +24,7 @@ export type StockPricePoint = z.infer<typeof stockPricePointSchema>;
 export type StockMetrics = z.infer<typeof stockMetricsSchema>;
 export type StockAnalysis = z.infer<typeof stockAnalysisSchema>;
 export type CacheMetadata = z.infer<typeof cacheMetadataSchema>;
+export type DataStatus = z.infer<typeof dataStatusSchema>;
 export type StockReport = z.infer<typeof stockReportSchema>;
 
 /** Unified error contract returned by the backend. */

@@ -11,8 +11,13 @@ import { requestLogger } from "./middleware/requestLogger";
 import { healthRouter } from "./routes/health";
 import { createReadinessRouter } from "./routes/ready";
 import { createStockRouter } from "./routes/stock";
+import { openHistoricalStore } from "./db/store";
+import { createAlphaVantageClient } from "./services/alphaVantageClient";
+import { createDataFreshnessService } from "./services/dataFreshnessService";
+import { createHistoricalDataService } from "./services/historicalDataService";
+import { createMarketDataSyncService } from "./services/marketDataSyncService";
 import { createFileReportRepository, type StockReportRepository } from "./services/reportRepository";
-import { createStockService, type StockService } from "./services/stockService";
+import { createStockService, type StockService, type StockServiceOptions } from "./services/stockService";
 import { ApiError } from "./types/errors";
 import { silentLogger, type Logger } from "./utils/logger";
 
@@ -92,6 +97,42 @@ export function createApp(options: CreateAppOptions): Express {
           logger,
         }));
 
+  // SQLite-backed (historical/hybrid) wiring — opened LAZILY and only when a test
+  // does not inject the service. mock/live never open the database. The store is
+  // process-lived (closed on exit); migrations run on open.
+  let historicalDeps: Partial<StockServiceOptions> = {};
+  const usesSqlite =
+    env.STOCK_DATA_MODE === "historical" || env.STOCK_DATA_MODE === "hybrid";
+  if (!options.stockService && usesSqlite) {
+    const histStore = openHistoricalStore({ location: env.STOCK_DB_PATH });
+    let syncService;
+    if (env.STOCK_DATA_MODE === "hybrid" && env.ALPHA_VANTAGE_API_KEY) {
+      // hybrid only reaches the provider when a key is configured; without one it
+      // degrades to serving SQLite (no sync), never a crash.
+      const provider = createAlphaVantageClient({
+        apiKey: env.ALPHA_VANTAGE_API_KEY,
+        timeoutMs: env.ALPHA_VANTAGE_TIMEOUT_MS,
+        maxPoints: env.ALPHA_VANTAGE_MAX_POINTS,
+      });
+      syncService = createMarketDataSyncService({
+        provider,
+        db: histStore.db,
+        priceRepository: histStore.prices,
+        syncStateRepository: histStore.syncState,
+        staleAfterHours: env.STOCK_STALE_AFTER_HOURS,
+        logger,
+      });
+    }
+    historicalDeps = {
+      historicalService: createHistoricalDataService({ priceRepository: histStore.prices }),
+      freshnessService: createDataFreshnessService(),
+      syncService,
+      priceRepository: histStore.prices,
+      syncStateRepository: histStore.syncState,
+      importRunRepository: histStore.importRuns,
+    };
+  }
+
   // Build the stock service from the configured API key unless a test injects
   // one. A missing key does not block startup — requests then surface an
   // `API_KEY_MISSING` error instead.
@@ -105,6 +146,7 @@ export function createApp(options: CreateAppOptions): Express {
       cacheTtlMs: env.STOCK_CACHE_TTL_SECONDS * 1000,
       cacheMaxEntries: env.STOCK_CACHE_MAX_ENTRIES,
       reportRepository,
+      ...historicalDeps,
     });
 
   const app = express();

@@ -3,11 +3,24 @@ dist/
 build/
 coverage/
 
-# Persistent stock-report cache (disk layer) and any local DB files
+# Persistent stock-report cache (disk layer), the SQLite history store, and any
+# local DB files. The default DB lives under .cache/ but these patterns also catch
+# a DB pointed elsewhere via STOCK_DB_PATH, including its WAL/SHM/journal sidecars.
 .cache/
 *.sqlite
 *.sqlite3
 *.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db-wal
+*.db-shm
+*-journal
+
+# Local market-data CSVs must never be committed (only tiny test fixtures live in
+# the repo, inline in tests). Keep real exports out of version control.
+/data/
+*.local.csv
 
 .env
 .env.*
