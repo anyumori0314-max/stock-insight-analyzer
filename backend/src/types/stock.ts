@@ -48,12 +48,24 @@ export function isStockRange(value: unknown): value is StockRange {
 }
 
 /**
- * Which provider produced a report: "live" (Alpha Vantage) or "mock"
- * (deterministic in-process fixtures). Defined here (a dependency-free module) so
- * both the service and the persistent cache can reference it without a circular
- * import; the persistent cache uses it to keep live and mock entries separated.
+ * The data-serving mode for a report:
+ *   live       = Alpha Vantage directly (Phase 2–11 path).
+ *   mock       = deterministic in-process fixtures (no traffic, no DB).
+ *   historical = SQLite history store only (no traffic).
+ *   hybrid     = SQLite first, provider-supplemented when stale (DB fallback).
+ *
+ * Defined here (a dependency-free module) so the service, the persistent cache and
+ * the historical pipeline can all reference it without a circular import. The
+ * persistent cache uses it to keep entries from different modes separated.
  */
-export type StockDataMode = "live" | "mock";
+export type StockDataMode = "live" | "mock" | "historical" | "hybrid";
+
+export const STOCK_DATA_MODES: readonly StockDataMode[] = [
+  "live",
+  "mock",
+  "historical",
+  "hybrid",
+] as const;
 
 /** A single day's OHLCV bar. All numeric, already parsed and validated. */
 export interface DailyBar {

@@ -78,12 +78,32 @@ export const cacheMetadataSchema = z
   })
   .strict();
 
+/**
+ * Safe data-provenance / freshness metadata (Phase 15). Strict: no unknown fields,
+ * every date a real calendar value, no internal paths / stacks / key state. All
+ * potentially-absent fields are explicitly nullable.
+ */
+export const dataStatusSchema = z
+  .object({
+    dataMode: z.enum(["live", "mock", "historical", "hybrid"]),
+    dataSource: z.enum(["mock", "sqlite", "csv", "api"]),
+    latestTradeDate: realIsoDate.nullable(),
+    lastUpdatedAt: realIsoDateTime.nullable(),
+    csvImportedAt: realIsoDateTime.nullable(),
+    apiSyncedAt: realIsoDateTime.nullable(),
+    persistent: z.boolean(),
+    stale: z.boolean(),
+    fallbackUsed: z.boolean(),
+    recordCount: z.number().int().min(0),
+  })
+  .strict();
+
 export const stockReportSchema = z
   .object({
     ticker: z.string().min(1),
     // Required (no default): a missing source must FAIL validation, never be
-    // silently assumed. The service always stamps "live" or "mock".
-    source: z.enum(["live", "mock"]),
+    // silently assumed. The service always stamps one of the four modes.
+    source: z.enum(["live", "mock", "historical", "hybrid"]),
     // One of the supported analysis windows (compact feed backs only 1m / 3m).
     range: z.enum(["1m", "3m"]),
     currency: z.string().nullable(),
@@ -95,6 +115,9 @@ export const stockReportSchema = z
     analysis: stockAnalysisSchema,
     warnings: z.array(z.string()),
     cache: cacheMetadataSchema,
+    // Optional so the Phase 2–11 contract and existing fixtures stay valid; when
+    // present it is fully (strictly) validated.
+    dataStatus: dataStatusSchema.optional(),
     disclaimer: z.string().min(1),
   })
   // No unknown fields: an internal/debug field can never leak into a response.

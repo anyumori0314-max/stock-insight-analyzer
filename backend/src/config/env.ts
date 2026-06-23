@@ -57,12 +57,49 @@ const envSchema = z
   // git-ignored. A write failure degrades to memory-only (never a request error).
   STOCK_CACHE_DIR: z.string().min(1).default(".cache/stock-reports"),
   // Data source for stock reports:
-  //   live = call Alpha Vantage (consumes the free-tier quota).
-  //   mock = serve deterministic in-process fixtures (no external traffic).
+  //   live       = call Alpha Vantage directly (Phase 2–11 path; free-tier quota).
+  //   mock       = deterministic in-process fixtures (no external traffic, no DB).
+  //   historical = serve ONLY from the SQLite history store (no external traffic).
+  //   hybrid     = SQLite first; supplement from the provider only when stale, and
+  //                fall back to stored data on a provider failure.
   // Default is `live` on purpose: an unset value must never silently serve fake
   // data (e.g. in production). Developers opt into `mock` explicitly in `.env`.
   // The production guard below additionally rejects `mock` when NODE_ENV=production.
-  STOCK_DATA_MODE: z.enum(["live", "mock"]).default("live"),
+  STOCK_DATA_MODE: z.enum(["live", "mock", "historical", "hybrid"]).default("live"),
+  // Filesystem path to the SQLite history database (the source of truth for the
+  // historical/hybrid modes and the data CLIs). Relative paths resolve from the
+  // process CWD. The default lives under the git-ignored `.cache/` directory; the
+  // DB plus its -wal/-shm sidecars are git-ignored. The parent directory is
+  // created on demand. A real database file is NEVER committed.
+  STOCK_DB_PATH: z.string().min(1).default(".cache/stock-data/history.sqlite"),
+  // Optional directory the daily job scans for *.csv files to import. Empty =
+  // skip the CSV step. Validated to exist only when actually used (by the CLI).
+  STOCK_CSV_DIRECTORY: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().min(1).optional()
+  ),
+  // Comma-separated tickers the daily job syncs by default (overridable per-run).
+  STOCK_SYNC_TICKERS: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value
+        ? value
+            .split(",")
+            .map((t) => t.trim().toUpperCase())
+            .filter(Boolean)
+        : []
+    ),
+  // Hours after the latest stored bar before data is flagged "stale" for the UI
+  // and a same-day re-sync is allowed (1–168). Default 24h (one trading day).
+  STOCK_STALE_AFTER_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+  // Hard caps for a single CSV import: max DATA rows and max file bytes. They
+  // bound the work done on a hostile/huge file. Positive integers.
+  STOCK_IMPORT_MAX_ROWS: z.coerce.number().int().positive().max(5_000_000).default(100_000),
+  STOCK_IMPORT_MAX_BYTES: z.coerce.number().int().positive().max(1_000_000_000).default(5_000_000),
+  // Seconds before a held daily-job lock is considered stale and recoverable
+  // (so an abnormally-terminated run never leaves a permanent lock). 60–86400.
+  STOCK_DAILY_LOCK_TIMEOUT_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
   // Comma-separated list of additional allowed CORS origins.
   ALLOWED_ORIGINS: z
     .string()

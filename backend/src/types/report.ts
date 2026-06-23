@@ -7,7 +7,8 @@
  * cache metadata, and any non-fatal warnings.
  */
 
-import type { StockRange } from "./stock";
+import type { DataSourceMetadata } from "../domain/historical";
+import type { StockDataMode, StockRange } from "./stock";
 
 export type TrendVerdict = "uptrend" | "downtrend" | "sideways" | "unknown";
 export type MomentumVerdict = "overbought" | "oversold" | "neutral" | "unknown";
@@ -67,11 +68,12 @@ export interface CacheMetadata {
 export interface StockReport {
   ticker: string;
   /**
-   * Which provider produced this report: "live" (Alpha Vantage) or "mock"
-   * (deterministic in-process fixtures). The service stamps it; the UI shows a
-   * notice for "mock" so development data is never mistaken for real prices.
+   * The data-serving mode that produced this report: "live", "mock",
+   * "historical" or "hybrid". The service stamps it; the UI shows a notice for
+   * non-live sources so development / stored data is never mistaken for fresh
+   * real-time prices. (The finer-grained origin is in {@link dataStatus}.)
    */
-  source: "live" | "mock";
+  source: StockDataMode;
   /** Logical window identifier (`1m` / `3m`). */
   range: StockRange;
   /** Reporting currency if known; null for `TIME_SERIES_DAILY`. */
@@ -86,6 +88,12 @@ export interface StockReport {
   /** Non-fatal notes (e.g. limited history, dropped duplicate dates). */
   warnings: string[];
   cache: CacheMetadata;
+  /**
+   * Safe data-provenance / freshness metadata (Phase 15). OPTIONAL so existing
+   * fixtures and the Phase 2–11 contract remain valid; the service populates it
+   * for every served report. Contains NO internal paths, stacks or API-key state.
+   */
+  dataStatus?: DataSourceMetadata;
   /** Always-present reminder that this is information, not investment advice. */
   disclaimer: string;
 }

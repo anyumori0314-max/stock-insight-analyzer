@@ -74,6 +74,40 @@ describe("Sidebar — ticker input form quality", () => {
   });
 });
 
+describe("Sidebar — error alert lifecycle (no empty role=alert)", () => {
+  it("renders NO role=alert on initial display", () => {
+    setup();
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+
+  it("renders NO role=alert after a valid ticker is added", async () => {
+    const { onAdd, user } = setup();
+    await user.type(screen.getByLabelText("ティッカーシンボル"), "nvda");
+    await user.click(screen.getByRole("button", { name: "追加" }));
+    expect(onAdd).toHaveBeenCalledWith("NVDA");
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+
+  it("renders exactly ONE role=alert with the message on invalid input", async () => {
+    const { onAdd, user } = setup();
+    await user.type(screen.getByLabelText("ティッカーシンボル"), "AA PL");
+    await user.click(screen.getByRole("button", { name: "追加" }));
+    expect(onAdd).not.toHaveBeenCalled();
+    const alerts = screen.queryAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("使用できない文字");
+  });
+
+  it("removes the role=alert from the DOM once the input is corrected", async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "追加" })); // empty -> error
+    expect(screen.queryAllByRole("alert")).toHaveLength(1);
+    // Typing clears the error -> the alert element leaves the DOM entirely.
+    await user.type(screen.getByLabelText("ティッカーシンボル"), "A");
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+});
+
 describe("Sidebar — FANG+ presets", () => {
   it("notes that the preset is not the official index", () => {
     setup();

@@ -3,13 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.5.0"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
+    "data:import": "tsx src/cli/importData.ts",
+    "data:daily": "tsx src/cli/dailyUpdate.ts",
     "test": "vitest",
     "test:run": "vitest run"
   },

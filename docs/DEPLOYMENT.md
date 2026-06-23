@@ -179,9 +179,18 @@ add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" alway
 - 破損 JSON / 期限切れ / キー不一致 / schema 不一致は読込時に削除。ヒット時も公開 schema を再検証してから提供。手動介入不要。
 - 完全リセットが必要なら `STOCK_CACHE_DIR` を削除して再起動（次回 miss から再構築）。
 
+### 6.6 履歴データ基盤（Phase 12〜15）の運用
+- **データモード** `STOCK_DATA_MODE`: `mock`（外部通信 0・DB なし）/ `historical`（SQLite のみ）/ `hybrid`（SQLite 優先＋不足時のみ API 補完、失敗時 fallback）/ `live`（従来）。詳細は **[DATA_PIPELINE.md](DATA_PIPELINE.md)**。
+- **Node 要件**: プロジェクト全体で **Node ≥ 22.5**（`engines.node` を root / backend / frontend で `>=22.5.0` に統一）。`historical`/`hybrid` と データ CLI（CSV 取込・日次バッチ）が標準 `node:sqlite` を使い、これが Node ≥ 22.5 を要求するため（ネイティブビルド不要・追加依存なし・Windows ARM 可）。`mock`/`live` のコードパス自体は Node ≥ 20.19 でも動くが、運用時は統一要件の 22.5 以上を満たすこと。
+- **DB ボリューム**: `STOCK_DB_PATH`（既定 `.cache/stock-data/history.sqlite`）は**書込可能な永続ボリューム**へ。DB と `-wal`/`-shm` は git 無視。実 DB はコミットしない。
+- **CSV 取込**: `npm run data:import -- --file/--directory ...`。仕様は **[CSV_FORMAT.md](CSV_FORMAT.md)**。実 CSV はコミットしない。
+- **日次バッチ**: `npm run data:daily`。Windows は `scripts/run-daily-stock-update.ps1` を Task Scheduler に**手動**登録（`schtasks` 例は DATA_PIPELINE.md）。二重起動は DB job lock で防止、異常終了後も永久 lock は残らない。
+- **バックアップ/復旧**: バッチ停止中に DB をコピー。DB 削除時は `historical` がデータ無し（422）、`hybrid` は再取得で再構築、CSV からも再構築可。`mock`/`live` は無影響。
+- **秘密情報**: ログ・レスポンス・DB に API キー/本文/stack/絶対パスを出さない。
+
 ### 6.5 既知の制限
-- **ウォッチリストの永続化は未実装**（選択銘柄はリロードで失われる）。
-- **mock データは完全な取引所カレンダーではない**（決定的な開発用営業日データ。早朝引け・臨時休場は厳密にはモデル化しない）。本番では `mock` 不可。
+- **ウォッチリストの永続化は未実装**（選択銘柄はリロードで失われる。今回も対象外）。
+- **mock / 営業日カレンダーは完全な取引所カレンダーではない**（主要な全日休場のみ。早朝引け・臨時休場は対象外）。最新営業日は Provider レスポンスの日付を正とする。本番では `mock` 不可。
 - **Recharts は遅延ロード**（チャート表示時のみ取得）。SPA の初期表示には含まれない。
 
 ### 6.4 グレースフルシャットダウン
@@ -199,3 +208,5 @@ add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" alway
 - [ ] `VITE_API_BASE_URL` が本番 API を指す
 - [ ] `/api/health` と `/api/ready` が監視に登録済み
 - [ ] `STOCK_CACHE_DIR` が書込可能な永続ボリューム
+- [ ] `historical`/`hybrid` 運用時: Node ≥ 22.5、`STOCK_DB_PATH` が永続ボリューム、実 DB/CSV が未コミット
+- [ ] 日次バッチを使う場合: `scripts/run-daily-stock-update.ps1` を Task Scheduler に登録済み

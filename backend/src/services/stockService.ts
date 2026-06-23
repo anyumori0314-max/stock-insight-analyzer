@@ -1,6 +1,10 @@
 import { buildStockReport } from "../analytics/report";
+import type { DataSourceKind, DataSourceMetadata } from "../domain/historical";
 import { stockReportSchema } from "../schemas/report";
-import { errorFor } from "../types/errors";
+import type { ImportRunRepository } from "../repositories/importRunRepository";
+import type { PriceRepository } from "../repositories/priceRepository";
+import type { SyncStateRepository } from "../repositories/syncStateRepository";
+import { errorFor, type ErrorCode } from "../types/errors";
 import type { StockReport } from "../types/report";
 import {
   DEFAULT_RANGE,
@@ -11,6 +15,9 @@ import {
   type StockTimeSeries,
 } from "../types/stock";
 import { createAlphaVantageClient, type AlphaVantageClient } from "./alphaVantageClient";
+import type { DataFreshnessService } from "./dataFreshnessService";
+import type { HistoricalDataService } from "./historicalDataService";
+import type { MarketDataSyncService, SyncOutcome } from "./marketDataSyncService";
 import { createMockStockDataProvider } from "./mockStockDataProvider";
 import type { StockReportRepository } from "./reportRepository";
 import { createTtlCache, type TtlCache } from "./ttlCache";
@@ -53,6 +60,22 @@ export interface StockServiceOptions {
   timeoutMs?: number;
   /** Hard cap on accepted provider points, forwarded when building the client. */
   maxPoints?: number;
+  // --- Historical / hybrid mode dependencies (Phase 13–15) ------------------
+  // Required only when `dataMode` is "historical" or "hybrid"; ignored otherwise.
+  /** Reads the SQLite history store into a provider-agnostic series. */
+  historicalService?: HistoricalDataService;
+  /** Decides + performs the (at most one) provider top-up for hybrid mode. */
+  syncService?: MarketDataSyncService;
+  /** Computes the freshness/stale verdict for the data-status metadata. */
+  freshnessService?: DataFreshnessService;
+  /** Used for `latestTradeDate` / `recordCount` in the data-status metadata. */
+  priceRepository?: PriceRepository;
+  /** Used for `apiSyncedAt` in the data-status metadata. */
+  syncStateRepository?: SyncStateRepository;
+  /** Used for `csvImportedAt` in the data-status metadata. */
+  importRunRepository?: ImportRunRepository;
+  /** Injectable clock (tests). */
+  now?: () => Date;
 }
 
 function cacheKey(ticker: string, range: StockRange): string {
@@ -126,6 +149,28 @@ function stampReport(
 }
 
 /**
+ * Like {@link stampReport} but for SQLite-backed (historical/hybrid) reports: it
+ * also attaches the optional `dataStatus` metadata. When `dataStatus` is
+ * undefined the field is omitted entirely, so the live/mock contract is
+ * unaffected. The completed report is validated (strict schema) before return.
+ */
+function finalize(
+  report: StockReport,
+  source: StockDataMode,
+  hit: boolean,
+  expiresAtMs: number,
+  dataStatus: DataSourceMetadata | undefined
+): StockReport {
+  const stamped: StockReport = {
+    ...report,
+    source,
+    cache: { hit, expiresAt: new Date(expiresAtMs).toISOString() },
+    ...(dataStatus ? { dataStatus } : {}),
+  };
+  return assertPublicReport(stamped);
+}
+
+/**
  * Orchestrates the stock data flow with a TWO-LAYER cache (memory + optional
  * persistent disk), keyed by `ticker:range`:
  *   - memory hit     -> serve immediately, `cache.hit = true`.
@@ -159,9 +204,12 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
 
   const repository = options.reportRepository;
   const dataMode: StockDataMode = options.dataMode ?? "live";
+  const now = options.now ?? (() => new Date());
 
+  // The direct provider client is only used by the live/mock path. historical
+  // serves purely from SQLite; hybrid reaches the provider via the sync service.
   let client: AlphaVantageClient | undefined = options.client;
-  if (!client) {
+  if (!client && (dataMode === "live" || dataMode === "mock")) {
     if (dataMode === "mock") {
       // Mock mode needs no API key and performs no network I/O.
       client = createMockStockDataProvider();
@@ -178,8 +226,98 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
   // caller receives the exact object that was cached.
   const inflight = new Map<string, Promise<StockReport>>();
 
+  /**
+   * Builds the public data-status metadata for a SQLite-backed (historical /
+   * hybrid) report. Only SAFE fields — no paths, stacks or key state.
+   */
+  function buildDataStatus(
+    report: StockReport,
+    latestStored: string | null,
+    stale: boolean,
+    recordCount: number,
+    sync: SyncOutcome | null
+  ): DataSourceMetadata {
+    const synced = Boolean(sync && sync.result === "success" && sync.syncedDates.length > 0);
+    const dataSource: DataSourceKind = synced ? "api" : "sqlite";
+    const apiSyncedAt =
+      sync?.apiSyncedAt ?? options.syncStateRepository?.get(report.ticker)?.lastSuccessAt ?? null;
+    const csvImportedAt = options.importRunRepository?.latestCompleted("csv")?.finishedAt ?? null;
+    return {
+      dataMode,
+      dataSource,
+      latestTradeDate: latestStored,
+      lastUpdatedAt: now().toISOString(),
+      csvImportedAt,
+      apiSyncedAt,
+      persistent: true,
+      stale,
+      fallbackUsed: dataMode === "hybrid" && sync?.result === "failed",
+      recordCount,
+    };
+  }
+
+  /**
+   * Serves a historical/hybrid report: SQLite first, with (for hybrid) at most one
+   * provider top-up; on a provider failure the stored data is still served
+   * (fallback). A memory-cache hit short-circuits both. Only a safe error is raised
+   * when there is no stored data at all.
+   */
+  async function getHistoricalReport(ticker: string, range: StockRange): Promise<StockReport> {
+    const historicalService = options.historicalService;
+    const freshnessService = options.freshnessService;
+    const priceRepository = options.priceRepository;
+    if (!historicalService || !freshnessService || !priceRepository) {
+      // Misconfiguration: a SQLite mode without its dependencies. Safe, generic.
+      throw errorFor("INTERNAL_SERVER_ERROR", "historical-deps-missing");
+    }
+
+    const key = cacheKey(ticker, range);
+    const cached = cache.getWithMeta(key);
+    if (cached) {
+      // Preserve the stored source + data-status; only refresh cache metadata.
+      return finalize(cached.value, cached.value.source, true, cached.expiresAt, cached.value.dataStatus);
+    }
+
+    let sync: SyncOutcome | null = null;
+    if (dataMode === "hybrid" && options.syncService) {
+      // At most one provider call; failures are swallowed into the outcome so we
+      // can still fall back to stored data below.
+      sync = await options.syncService.sync(ticker, range);
+    }
+
+    const series = historicalService.getTimeSeries(ticker, range);
+    if (!series) {
+      // No stored data: only NOW is an error appropriate (hybrid fallback can't help).
+      if (sync && sync.result === "failed" && sync.errorCode) {
+        throw errorFor(sync.errorCode as ErrorCode, "hybrid-no-local-data");
+      }
+      throw errorFor("INSUFFICIENT_DATA", "no-local-data");
+    }
+
+    const windowed = sliceSeriesToRange(series, range);
+    const report = buildStockReport(windowed);
+    const latestStored = priceRepository.getLatestTradeDate(ticker);
+    const freshness = freshnessService.compute(latestStored, priceRepository.countBars(ticker));
+    const dataStatus = buildDataStatus(
+      { ...report, ticker: series.ticker },
+      latestStored,
+      freshness.stale,
+      report.series.length,
+      sync
+    );
+
+    const expiresAt = cache.peekExpiry();
+    const finalized = finalize(report, dataMode, false, expiresAt, dataStatus);
+    cache.set(key, finalized, expiresAt);
+    return finalized;
+  }
+
   return {
     async getReport(ticker: string, range: StockRange = DEFAULT_RANGE): Promise<StockReport> {
+      if (dataMode === "historical" || dataMode === "hybrid") {
+        return getHistoricalReport(ticker, range);
+      }
+
       if (!client) {
         throw errorFor("API_KEY_MISSING");
       }
