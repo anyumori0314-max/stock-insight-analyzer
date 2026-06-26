@@ -1,3 +1,5 @@
+import path from "path";
+
 import cors from "cors";
 import express, { type Express } from "express";
 import helmet from "helmet";
@@ -12,7 +14,7 @@ import { healthRouter } from "./routes/health";
 import { createReadinessRouter } from "./routes/ready";
 import { createStockRouter } from "./routes/stock";
 import { openHistoricalStore } from "./db/store";
-import { createAlphaVantageClient } from "./services/alphaVantageClient";
+import { createMarketDataProvider } from "./providers/factory";
 import { createDataFreshnessService } from "./services/dataFreshnessService";
 import { createHistoricalDataService } from "./services/historicalDataService";
 import { createMarketDataSyncService } from "./services/marketDataSyncService";
@@ -47,6 +49,25 @@ export interface CreateAppOptions {
    * touches the disk.
    */
   reportRepository?: StockReportRepository;
+  /**
+   * Directory of pre-built SPA assets to serve from this process. Overrides
+   * `env.STOCK_STATIC_DIR` (tests pass a temp dir). When set, the server serves
+   * the SPA + `index.html` fallback and relaxes the CSP to an SPA-safe policy;
+   * when unset it is a JSON-only API with the strictest CSP.
+   */
+  staticDir?: string;
+}
+
+/** True when `origin`'s host equals this request's Host (i.e. a same-origin call). */
+function isSameOrigin(origin: string | undefined, host: string | undefined): boolean {
+  if (!origin || !host) {
+    return false;
+  }
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -85,6 +106,12 @@ export function createApp(options: CreateAppOptions): Express {
   const rateLimitConfig = resolveRateLimit(options);
   const logger = options.logger ?? silentLogger;
 
+  // When a static directory is configured (the single-container image) this
+  // process ALSO serves the SPA and falls back to index.html for client routes.
+  // Empty = JSON-only API (the SPA is hosted elsewhere) with the strictest CSP.
+  const staticDir = options.staticDir ?? env.STOCK_STATIC_DIR;
+  const serveStatic = Boolean(staticDir);
+
   // Persistent (disk) report cache — the second cache layer. Off in test mode
   // (so the suite never writes files) unless a test injects its own.
   const reportRepository =
@@ -108,8 +135,11 @@ export function createApp(options: CreateAppOptions): Express {
     let syncService;
     if (env.STOCK_DATA_MODE === "hybrid" && env.ALPHA_VANTAGE_API_KEY) {
       // hybrid only reaches the provider when a key is configured; without one it
-      // degrades to serving SQLite (no sync), never a crash.
-      const provider = createAlphaVantageClient({
+      // degrades to serving SQLite (no sync), never a crash. The provider is the
+      // Phase 19 resilient Alpha Vantage stack (timeout + rate-limit +
+      // circuit-breaker + dedup) behind the legacy client contract.
+      const provider = createMarketDataProvider({
+        dataMode: "live",
         apiKey: env.ALPHA_VANTAGE_API_KEY,
         timeoutMs: env.ALPHA_VANTAGE_TIMEOUT_MS,
         maxPoints: env.ALPHA_VANTAGE_MAX_POINTS,
@@ -177,24 +207,35 @@ export function createApp(options: CreateAppOptions): Express {
   // 8. errorHandler — unified error contract; never leaks internals.
   // --------------------------------------------------------------------------
 
-  // 1. Security headers. This server returns ONLY JSON (the SPA is built and
-  // served separately — see docs/DEPLOYMENT.md), so the strictest CSP applies:
-  // nothing may be loaded, embedded or framed. These are defense-in-depth
-  // (browsers do not apply CSP to JSON documents) but cost nothing and harden
-  // any future HTML surface. Cross-origin access is governed by the CORS
-  // allow-list below; CORP is set to cross-origin so the configured SPA origin
-  // can read the API while CORS still restricts WHICH origins may do so.
+  // 1. Security headers. In JSON-only mode the strictest CSP applies (nothing may
+  // be loaded/embedded/framed). When this process ALSO serves the SPA
+  // (`serveStatic`), the CSP is relaxed to an SPA-safe, same-origin policy so the
+  // bundled scripts/styles load while everything else stays locked down. CSP does
+  // not affect JSON responses either way. CORP is cross-origin so a separately
+  // hosted SPA can still read the API; CORS restricts WHICH origins may.
+  const cspDirectives: Record<string, string[]> = serveStatic
+    ? {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        // Vite injects a few inline styles; allow inline CSS only (not inline JS).
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+        objectSrc: ["'none'"],
+      }
+    : {
+        defaultSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+      };
   app.use(
     helmet({
-      contentSecurityPolicy: {
-        useDefaults: false,
-        directives: {
-          defaultSrc: ["'none'"],
-          baseUri: ["'none'"],
-          formAction: ["'none'"],
-          frameAncestors: ["'none'"],
-        },
-      },
+      contentSecurityPolicy: { useDefaults: false, directives: cspDirectives },
       referrerPolicy: { policy: "no-referrer" },
       // HSTS only in production (served over HTTPS). In dev/test over plain HTTP
       // it would be ignored anyway; keeping it off matches deployment reality.
@@ -213,24 +254,26 @@ export function createApp(options: CreateAppOptions): Express {
     next();
   });
 
-  // 2. CORS.
+  // 2. CORS. The delegate form is used so a SAME-ORIGIN request can be recognized
+  // by comparing its Origin host to this server's Host — required for the
+  // single-container mode, where the bundled SPA is served from THIS origin and so
+  // would otherwise be rejected for not being in the cross-origin allow-list.
   app.use(
-    cors({
-      origin(origin, callback) {
-        // Requests without an Origin header (curl, server-to-server, health
-        // checks, same-origin) are allowed; CORS only guards browser origins.
-        if (!origin) {
-          callback(null, true);
-          return;
-        }
-        if (allowedOrigins.includes(origin)) {
-          callback(null, true);
-          return;
-        }
-        callback(new ApiError(403, "FORBIDDEN_ORIGIN", "Origin is not allowed."));
-      },
-      // No cookies / session auth in this API, so credentials are disabled.
-      credentials: false,
+    cors((req, callback) => {
+      const origin = req.headers.origin;
+      // Allowed when: no Origin (curl, server-to-server, health checks); an
+      // explicitly allow-listed cross-origin; or (only when we serve the SPA) a
+      // same-origin request whose Origin host matches this server's Host.
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        (serveStatic && isSameOrigin(origin, req.headers.host))
+      ) {
+        // No cookies / session auth in this API, so credentials are disabled.
+        callback(null, { origin: true, credentials: false });
+        return;
+      }
+      callback(new ApiError(403, "FORBIDDEN_ORIGIN", "Origin is not allowed."));
     })
   );
 
@@ -269,6 +312,32 @@ export function createApp(options: CreateAppOptions): Express {
 
   // 6. Stricter limiter for stock routes.
   app.use("/api/stock", stockLimiter, createStockRouter(stockService));
+
+  // 6b. SPA static assets + history-fallback (single-container mode only). Mounted
+  // AFTER the API and BEFORE the 404 handler, and it NEVER touches `/api`, so:
+  //   - real files (index.html, /assets/*, favicon) are served directly;
+  //   - any other GET/HEAD navigation falls back to index.html (client routing);
+  //   - every `/api/*` path (including unknown ones and the health/ready probes)
+  //     bypasses the SPA entirely and keeps the JSON 404 contract.
+  if (serveStatic && staticDir) {
+    const resolvedStaticDir = path.resolve(staticDir);
+    const indexHtml = path.join(resolvedStaticDir, "index.html");
+    // `index: false` so "/" is handled by the explicit fallback below (one code
+    // path for all SPA routes); assets keep long-lived immutable caching.
+    app.use(express.static(resolvedStaticDir, { index: false, fallthrough: true }));
+    app.use((req, res, next) => {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        return next();
+      }
+      // Never shadow the API surface: unknown /api paths must stay JSON 404s.
+      if (req.path === "/api" || req.path.startsWith("/api/")) {
+        return next();
+      }
+      res.sendFile(indexHtml, (err) => {
+        if (err) next(err);
+      });
+    });
+  }
 
   // 7 & 8. Unified 404 + error contract. The error handler logs unexpected
   // errors through the structured logger (never the raw Error / stack).

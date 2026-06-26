@@ -9,8 +9,21 @@ import { MetricsPanel } from "./components/MetricsPanel";
 import { RangeSwitch } from "./components/RangeSwitch";
 import { Sidebar } from "./components/Sidebar";
 import { TickerTabs } from "./components/TickerTabs";
+import { WatchlistPanel } from "./components/WatchlistPanel";
 import { reportKey, useStockReports, type ReportState } from "./hooks/useStockReports";
-import { DEFAULT_RANGE, rangeLabel, type StockRange } from "./lib/ranges";
+import { buildComparisonCsv } from "./lib/comparisonExport";
+import { downloadTextFile } from "./lib/csv";
+import { rangeLabel, type StockRange } from "./lib/ranges";
+import { FANG_PLUS_PRESETS } from "./lib/tickers";
+import {
+  MAX_WATCHLIST_TICKERS,
+  loadWatchlistState,
+  parseImportedWatchlist,
+  saveWatchlistState,
+  serializeWatchlist,
+} from "./lib/watchlistStorage";
+
+const PRESET_SYMBOLS = new Set(FANG_PLUS_PRESETS.map((preset) => preset.symbol));
 
 // Recharts is the heaviest dependency and is not needed for the first paint
 // (the empty-state prompt) or for the metrics. Load the chart lazily so Recharts
@@ -23,18 +36,43 @@ const PriceChart = lazy(() =>
 const PANEL_ID = "stock-panel";
 
 function App() {
-  // Start empty: nothing is selected and nothing is fetched until the user picks
-  // a ticker, so the initial render makes ZERO API calls.
-  const [selected, setSelected] = useState<string[]>([]);
-  const [activeTicker, setActiveTicker] = useState<string | null>(null);
+  // Restore the persisted watchlist (Phase 17) once, on first render. An empty /
+  // missing / corrupt store yields the clean default, so a fresh visitor still
+  // starts empty and the initial render makes ZERO API calls.
+  const initialWatchlist = useMemo(() => loadWatchlistState(), []);
+  const [selected, setSelected] = useState<string[]>(initialWatchlist.watchlist);
+  const [activeTicker, setActiveTicker] = useState<string | null>(initialWatchlist.selectedTicker);
   // The analysis window. Each (ticker, range) pair is fetched and cached
   // independently, so switching the window re-uses a previously loaded pair
   // instead of re-calling the API.
-  const [range, setRange] = useState<StockRange>(DEFAULT_RANGE);
+  const [range, setRange] = useState<StockRange>(initialWatchlist.selectedRange);
   const { reports, pending, request, refetch, forget } = useStockReports();
+
+  // Visually-hidden announcement for watchlist outcomes (save failure / import /
+  // reset). Distinct from the main panel's live region below.
+  const [watchlistStatus, setWatchlistStatus] = useState("");
+  // Polite status for the comparison CSV export outcome.
+  const [comparisonStatus, setComparisonStatus] = useState("");
 
   const errorRef = useRef<HTMLDivElement>(null);
   const lastErrorFocusRef = useRef<string>("");
+
+  // Persist the watchlist whenever it changes. A write failure (quota / disabled
+  // storage) only announces a notice — the app keeps working from memory.
+  useEffect(() => {
+    const result = saveWatchlistState({
+      watchlist: selected,
+      selectedTicker: activeTicker,
+      selectedRange: range,
+    });
+    if (!result.ok) {
+      setWatchlistStatus(
+        result.reason === "quota"
+          ? "保存容量の上限によりウォッチリストを保存できませんでした（変更はこのセッションのみ有効です）。"
+          : "ウォッチリストを保存できませんでした（変更はこのセッションのみ有効です）。"
+      );
+    }
+  }, [selected, activeTicker, range]);
 
   // Keep the active ticker valid as the selection changes.
   useEffect(() => {
@@ -93,12 +131,32 @@ function App() {
         ? `${activeTicker} の ${rangeLabel(range)} を表示しました。`
         : "";
 
+  // Mirrors of the watchlist state for the stable ([]-deps) handlers below, so
+  // they read the latest values without being recreated on every change.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const activeTickerRef = useRef(activeTicker);
+  activeTickerRef.current = activeTicker;
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+
   // Stable handler identities so the memoized Sidebar / ComparisonTable / tabs do
   // not re-render on unrelated state changes. setSelected / setActiveTicker /
   // forget are all stable, so these never need to be recreated.
   const handleAdd = useCallback((ticker: string) => {
+    const current = selectedRef.current;
+    if (current.includes(ticker)) {
+      setActiveTicker(ticker);
+      return;
+    }
+    // Enforce the max-entries cap; announce rather than silently dropping.
+    if (current.length >= MAX_WATCHLIST_TICKERS) {
+      setWatchlistStatus(`登録できる銘柄は最大${MAX_WATCHLIST_TICKERS}件です。追加できませんでした。`);
+      return;
+    }
     setSelected((prev) => (prev.includes(ticker) ? prev : [...prev, ticker]));
     setActiveTicker(ticker);
+    setWatchlistStatus("");
   }, []);
 
   const handleRemove = useCallback(
@@ -107,6 +165,68 @@ function App() {
       // Abort any in-flight request (across ALL windows) and drop kept state so a
       // late response cannot revive the removed ticker (and a re-add re-fetches).
       forget(ticker);
+    },
+    [forget]
+  );
+
+  // Reorder the watchlist (keyboard-friendly move up/down); persisted by the
+  // effect above. The active ticker is unaffected by a reorder.
+  const handleMove = useCallback((ticker: string, direction: "up" | "down") => {
+    setSelected((prev) => {
+      const index = prev.indexOf(ticker);
+      if (index === -1) return prev;
+      const target = direction === "up" ? index - 1 : index + 1;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }, []);
+
+  const handleResetWatchlist = useCallback(() => {
+    selectedRef.current.forEach((ticker) => forget(ticker));
+    setSelected([]);
+    setActiveTicker(null);
+    setWatchlistStatus("ウォッチリストを初期化しました。");
+  }, [forget]);
+
+  const handleExportWatchlist = useCallback(() => {
+    const json = serializeWatchlist({
+      watchlist: selectedRef.current,
+      selectedTicker: activeTickerRef.current,
+      selectedRange: rangeRef.current,
+    });
+    try {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "stock-insight-watchlist.json";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setWatchlistStatus("ウォッチリストをエクスポートしました。");
+    } catch {
+      setWatchlistStatus("エクスポートに失敗しました。");
+    }
+  }, []);
+
+  const handleImportWatchlist = useCallback(
+    (jsonText: string) => {
+      const result = parseImportedWatchlist(jsonText);
+      if (!result.ok) {
+        setWatchlistStatus(`インポートに失敗しました：${result.error}`);
+        return;
+      }
+      // Drop any in-flight/kept reports for tickers no longer in the list.
+      selectedRef.current.forEach((ticker) => {
+        if (!result.state.watchlist.includes(ticker)) forget(ticker);
+      });
+      setSelected(result.state.watchlist);
+      setActiveTicker(result.state.selectedTicker);
+      setRange(result.state.selectedRange);
+      setWatchlistStatus(`ウォッチリストをインポートしました（${result.state.watchlist.length}件）。`);
     },
     [forget]
   );
@@ -123,12 +243,37 @@ function App() {
     return view;
   }, [selected, reports, range]);
 
+  // Export the current comparison (selected tickers in the active window) as CSV.
+  // The builder applies RFC-4180 quoting AND CSV formula-injection neutralization
+  // to every field. A download failure (non-DOM / blocked) announces a notice.
+  const handleExportComparison = useCallback(() => {
+    const csv = buildComparisonCsv(selected, rangeReports, range);
+    const filename = `stock-comparison-${range}.csv`;
+    const ok = downloadTextFile(filename, csv);
+    setComparisonStatus(
+      ok ? "比較表をCSVでエクスポートしました。" : "CSVのエクスポートに失敗しました。"
+    );
+  }, [selected, rangeReports, range]);
+
   return (
     <div className="app-shell">
       <Header />
 
       <div className="app-body">
-        <Sidebar selected={selected} onAdd={handleAdd} onRemove={handleRemove} />
+        <Sidebar selected={selected} onAdd={handleAdd} onRemove={handleRemove}>
+          <WatchlistPanel
+            watchlist={selected}
+            presets={PRESET_SYMBOLS}
+            activeTicker={activeTicker}
+            statusMessage={watchlistStatus}
+            onSelect={setActiveTicker}
+            onRemove={handleRemove}
+            onMove={handleMove}
+            onReset={handleResetWatchlist}
+            onExport={handleExportWatchlist}
+            onImport={handleImportWatchlist}
+          />
+        </Sidebar>
 
         <main className="main">
           {selected.length === 0 ? (
@@ -245,6 +390,16 @@ function App() {
               <section className="card">
                 <div className="card__header">
                   <h2 className="card__title">銘柄比較</h2>
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={handleExportComparison}
+                  >
+                    CSVエクスポート
+                  </button>
+                </div>
+                <div className="sr-only" role="status" aria-live="polite">
+                  {comparisonStatus}
                 </div>
                 <ComparisonTable
                   tickers={selected}

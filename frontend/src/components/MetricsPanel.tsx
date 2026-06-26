@@ -75,6 +75,14 @@ export const MetricsPanel = memo(function MetricsPanel({ metrics, currency }: Me
         value={formatPercent(metrics.annualizedVolatilityPercent)}
       />
       <MetricCard label="最大下落率" value={formatPercent(metrics.maxDrawdownPercent)} />
+      <MetricCard label="MACD" value={formatNumber(metrics.macd, 3)} />
+      <MetricCard label="MACD シグナル" value={formatNumber(metrics.macdSignal, 3)} />
+      <MetricCard label="MACD ヒストグラム" value={formatNumber(metrics.macdHistogram, 3)} />
+      <MetricCard label="ボリンジャー上限 (+2σ)" value={formatPrice(metrics.bollingerUpper, currency)} />
+      <MetricCard label="ボリンジャー下限 (−2σ)" value={formatPrice(metrics.bollingerLower, currency)} />
+      <MetricCard label="出来高変化 (前日比)" value={formatPercent(metrics.volumeChangePercent)} />
+      <MetricCard label="20日線乖離率" value={formatPercent(metrics.sma20DeviationPercent)} />
+      <MetricCard label="50日線乖離率" value={formatPercent(metrics.sma50DeviationPercent)} />
     </div>
   );
 });

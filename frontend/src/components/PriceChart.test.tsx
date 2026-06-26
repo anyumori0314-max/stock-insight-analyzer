@@ -49,14 +49,19 @@ describe("PriceChart", () => {
       /価格チャート要約/
     );
 
-    // The visual chart subtree is hidden from assistive tech ...
-    const hidden = container.querySelector('[aria-hidden="true"]');
+    // The visual chart subtree (the SVG canvas) is hidden from assistive tech ...
+    const hidden = container.querySelector(".chart-canvas");
     expect(hidden).toBeInTheDocument();
-    expect(hidden).toHaveClass("chart-canvas");
+    expect(hidden).toHaveAttribute("aria-hidden", "true");
 
     // ... and must NOT contain a keyboard focus stop (no tabindex=0), so a
     // keyboard user is never stranded on an element screen readers can't see.
     expect(hidden?.querySelector('[tabindex="0"]')).toBeNull();
+
+    // The accessible legend lives OUTSIDE the hidden subtree so it is announced.
+    const legend = container.querySelector(".chart-legend");
+    expect(legend).toBeInTheDocument();
+    expect(legend?.closest('[aria-hidden="true"]')).toBeNull();
   });
 
   it("renders a single data point without throwing", () => {

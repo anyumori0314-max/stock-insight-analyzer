@@ -11,7 +11,11 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "data:import": "tsx src/cli/importData.ts",
+    "data:backfill": "tsx src/cli/backfill.ts",
     "data:daily": "tsx src/cli/dailyUpdate.ts",
+    "data:backup": "tsx src/cli/backup.ts",
+    "data:restore": "tsx src/cli/restore.ts",
+    "ci:smoke": "tsx src/cli/ciSmoke.ts",
     "test": "vitest",
     "test:run": "vitest run"
   },

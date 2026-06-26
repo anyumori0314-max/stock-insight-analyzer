@@ -14,11 +14,12 @@ import {
   type StockRange,
   type StockTimeSeries,
 } from "../types/stock";
-import { createAlphaVantageClient, type AlphaVantageClient } from "./alphaVantageClient";
+import { countTradingDays } from "../utils/marketCalendar";
+import type { AlphaVantageClient } from "./alphaVantageClient";
+import { createMarketDataProvider } from "../providers/factory";
 import type { DataFreshnessService } from "./dataFreshnessService";
 import type { HistoricalDataService } from "./historicalDataService";
 import type { MarketDataSyncService, SyncOutcome } from "./marketDataSyncService";
-import { createMockStockDataProvider } from "./mockStockDataProvider";
 import type { StockReportRepository } from "./reportRepository";
 import { createTtlCache, type TtlCache } from "./ttlCache";
 
@@ -90,16 +91,30 @@ function cacheKey(ticker: string, range: StockRange): string {
  * return fewer bars than the window needs, we serve what is available with an
  * explicit, non-fatal warning — never a fabricated extension. Metrics are then
  * computed over exactly this window, so the indicators always match the displayed
- * period. Exported for unit testing.
+ * period.
+ *
+ * The shortfall is judged in TRADING days (via {@link countTradingDays}), not raw
+ * bar count, so the warning agrees with the coverage service: a window backed by
+ * weekend-padded rows is reported as short by the SAME measure the data-state UI
+ * uses. The slice boundary itself stays on array length, so `1m`/`3m` keep
+ * returning their usual 21/63 most-recent bars. Exported for unit testing.
  */
-export function sliceSeriesToRange(series: StockTimeSeries, range: StockRange): StockTimeSeries {
+export function sliceSeriesToRange(
+  series: StockTimeSeries,
+  range: StockRange,
+  now: Date = new Date()
+): StockTimeSeries {
   const want = RANGE_TRADING_DAYS[range];
-  const available = series.bars.length;
-  const bars = available > want ? series.bars.slice(available - want) : series.bars;
+  const total = series.bars.length;
+  const bars = total > want ? series.bars.slice(total - want) : series.bars;
+  const availableTradingDays = countTradingDays(
+    bars.map((b) => b.date),
+    { now }
+  );
   const warnings = [...series.warnings];
-  if (available < want) {
+  if (availableTradingDays < want) {
     warnings.push(
-      `選択した期間（${RANGE_LABEL[range]}＝約${want}営業日）に対し、利用可能な履歴は${available}営業日です。取得できた範囲で表示しています。`
+      `選択した期間（${RANGE_LABEL[range]}＝約${want}営業日）に対し、利用可能な履歴は${availableTradingDays}営業日です。取得できた範囲で表示しています。`
     );
   }
   return { ...series, range, bars, warnings };
@@ -208,13 +223,18 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
 
   // The direct provider client is only used by the live/mock path. historical
   // serves purely from SQLite; hybrid reaches the provider via the sync service.
+  // Built through the Phase 19 provider factory: `mock` is the offline provider
+  // (no key / no network); `live` is the resilient Alpha Vantage provider
+  // (timeout + rate-limit + circuit-breaker + in-flight dedup). A live request
+  // without a key leaves `client` undefined so the app still boots and surfaces
+  // API_KEY_MISSING at request time (unchanged behavior).
   let client: AlphaVantageClient | undefined = options.client;
   if (!client && (dataMode === "live" || dataMode === "mock")) {
     if (dataMode === "mock") {
-      // Mock mode needs no API key and performs no network I/O.
-      client = createMockStockDataProvider();
+      client = createMarketDataProvider({ dataMode: "mock" });
     } else if (options.apiKey) {
-      client = createAlphaVantageClient({
+      client = createMarketDataProvider({
+        dataMode: "live",
         apiKey: options.apiKey,
         timeoutMs: options.timeoutMs,
         maxPoints: options.maxPoints,
@@ -294,7 +314,7 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
       throw errorFor("INSUFFICIENT_DATA", "no-local-data");
     }
 
-    const windowed = sliceSeriesToRange(series, range);
+    const windowed = sliceSeriesToRange(series, range, now());
     const report = buildStockReport(windowed);
     const latestStored = priceRepository.getLatestTradeDate(ticker);
     const freshness = freshnessService.compute(latestStored, priceRepository.countBars(ticker));
@@ -366,7 +386,7 @@ export function createStockService(options: StockServiceOptions = {}): StockServ
       const activeRepository = repository;
       const promise = (async () => {
         const fullSeries = await activeClient.fetchDailySeries(ticker, range);
-        const windowed = sliceSeriesToRange(fullSeries, range);
+        const windowed = sliceSeriesToRange(fullSeries, range, now());
         const report = buildStockReport(windowed);
         // Reserve the expiry this entry will receive, then stamp source + cache
         // metadata and VALIDATE the completed public report. An invalid report

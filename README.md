@@ -101,11 +101,27 @@ npm run test:frontend   # frontend（Vitest + React Testing Library, jsdom）
 
 > **実 API スモークテストについて**: 実際の Alpha Vantage への通信確認は、上記の自動テストとは**分離**しています。`ALPHA_VANTAGE_API_KEY` を設定して `npm run dev:backend` を起動し、`curl http://localhost:3001/api/stock/AAPL` で手動確認してください（自動テストスイートでは実行しません）。
 
+## CI / コントリビューション
+
+GitHub Actions（`.github/workflows/ci.yml`）が PR ごとに **完全オフライン**（実 API 通信・
+実キー・永続 DB・実 CSV なし）で typecheck・テスト・ビルド・監査・禁止ファイル検査・
+SQLite/CSV smoke を実行します。Linux ジョブがフルゲート、Windows ジョブがクロスプラット
+フォーム（`node:sqlite` のパス処理・PowerShell 引数）を確認します。
+
+ローカルで同じ検証を行うコマンド、PR 前チェックリスト、Branch protection の設定手順、
+Actions Secrets を扱う際の注意は **[CONTRIBUTING.md](CONTRIBUTING.md)** を参照してください。
+
+```bash
+# ローカル一括検証（CI と同等）
+npm run typecheck && npm run test:run && npm run ci:smoke && npm run build
+npm audit --audit-level=high && bash scripts/check-forbidden-files.sh
+```
+
 ## API 仕様
 
 ### `GET /api/stock/:ticker`
 
-ティッカーと任意の `?range=`（`1m` / `3m`、既定 `3m`）を検証・正規化し、Alpha Vantage の日次データ（`outputsize=compact`、直近約 100 営業日）を取得して要求期間の末尾 N 営業日に切り出し、分析した次の JSON を返します。未対応の期間（`6m` / `1y` など）は `400 INVALID_RANGE` で拒否します。
+ティッカーと任意の `?range=`（`1m` / `3m` / `6m` / `1y`、既定 `3m`）を検証・正規化し、データソース（live / mock / historical / hybrid）から日次データを取得して要求期間の末尾 N 営業日に切り出し、分析した次の JSON を返します。`1m`（約21日）・`3m`（約63日）は無料の compact フィードでも完全に賄えますが、`6m`（約126日）・`1y`（約252日）は SQLite 履歴ストア（historical / hybrid）と CSV backfill が前提です。live モードで長期を要求した場合は、取得できた範囲のみを表示し「必要営業日数 vs 利用可能数」を明示する非致命的な警告を付与します（データの捏造はしません）。未対応の値は `400 INVALID_RANGE` で拒否します。
 
 ```jsonc
 {
@@ -229,7 +245,33 @@ npm run test:frontend   # frontend（Vitest + React Testing Library, jsdom）
 | `test:run` / `test:backend` / `test:frontend` | テスト実行（外部通信なし） |
 | `data:import -- --file "<CSV>"` | CSV を検証して SQLite へ冪等に取込（Node ≥ 22.5） |
 | `data:import -- --directory "<DIR>"` | ディレクトリ内の `*.csv` を一括取込 |
+| `data:backfill -- --csv-directory "<DIR>"` | 履歴 CSV を一括ロードしてカバレッジを出力 |
 | `data:daily [-- --csv-directory "<DIR>" --tickers "AAPL,MSFT"]` | 日次バッチ（二重起動防止・CSV 取込・API 補完） |
+| `data:backup [-- --dry-run --keep <N>]` | SQLite を `VACUUM INTO` で整合バックアップ＋世代管理 |
+| `data:restore -- --file "<NAME>" [--dry-run] / --list` | 検証付きリストア（現行 DB を退避してから差し替え） |
+| `ci:smoke` | オフライン smoke（マイグレーション + backfill + 冪等性。CI で使用） |
+
+> CLI には絶対パス（`C:\...`）より**相対パス**か環境変数（`STOCK_CSV_DIRECTORY` /
+> `STOCK_DB_PATH` / `STOCK_BACKUP_DIR`）を推奨します。ログ・エラーは絶対パスや stack を
+> 出しません。ただし `npm run … -- --file C:\...` では **npm 自身が**コマンド行をエコー
+> するため端末に絶対パスが出得ます（アプリ側では抑止不可）。
+
+## Docker（単一公開イメージ）
+
+SPA と `/api` を **1 つのコンテナ**で提供します（既定ポート `3000`）。
+
+```bash
+docker build -t stock-insight-analyzer .
+# 外部通信ゼロのモックで起動 → ブラウザで http://localhost:3000
+docker run --rm -p 3000:3000 -e STOCK_DATA_MODE=mock stock-insight-analyzer
+```
+
+`/api/*` は API、それ以外の GET は SPA（`index.html`）にフォールバックします。SPA は
+同一オリジンの相対 `/api` を呼ぶため `VITE_API_BASE_URL` は不要です。`PORT` で待受ポートを
+変更できます（`HEALTHCHECK` は `/api/health`）。詳細・本番運用は下記 OPERATIONS を参照。
+
+> Docker・バックアップ/リストア・cron / Windows Task Scheduler・障害復旧の手順は
+> **[docs/OPERATIONS.md](docs/OPERATIONS.md)** を参照してください。
 
 ## 本番配信時のセキュリティヘッダ（フロントエンド）
 

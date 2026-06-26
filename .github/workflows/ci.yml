@@ -1,0 +1,190 @@
+name: CI
+
+# Runs on every push to a PR branch and on the protected branches themselves.
+# The whole pipeline is OFFLINE: it never contacts Alpha Vantage, never needs a
+# real API key, and never touches a persistent database or real CSV. All data is
+# generated into throwaway temp dirs and discarded with the runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same PR cancels the in-progress run for that ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: the pipeline only needs to read the repository.
+permissions:
+  contents: read
+
+env:
+  # Keep CI strictly offline and deterministic. No real provider mode is ever used.
+  STOCK_DATA_MODE: mock
+  CI: "true"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux: the full gate. typecheck -> tests -> smoke -> build -> audits ->
+  # forbidden-file check -> SQLite migration + CSV import smoke (via real CLIs).
+  # ---------------------------------------------------------------------------
+  linux:
+    name: Linux (lint, test, build, smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # engines.node is ">=22.5.0" in root/backend/frontend (node:sqlite needs
+      # 22.5+). Pin the latest 22.x so CI matches the declared minimum.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies (root + backend + frontend)
+        run: |
+          npm ci
+          npm --prefix backend ci
+          npm --prefix frontend ci
+
+      - name: Typecheck (frontend + backend)
+        run: npm run typecheck
+
+      - name: Backend unit + integration tests
+        run: npm run test:backend
+
+      - name: Frontend unit + component tests
+        run: npm run test:frontend
+
+      - name: Offline CI smoke (migrations + CSV backfill + idempotency)
+        run: npm run ci:smoke
+
+      - name: Production build (frontend + backend)
+        run: npm run build
+
+      - name: Audit (root)
+        run: npm audit --audit-level=high
+
+      - name: Audit (frontend)
+        run: npm --prefix frontend audit --audit-level=high
+
+      - name: Audit (backend)
+        run: npm --prefix backend audit --audit-level=high
+
+      - name: Forbidden-file check (no secrets / DBs / build artifacts tracked)
+        run: bash scripts/check-forbidden-files.sh
+
+      # Drives the REAL CLIs (data:import + data:backfill) against a generated
+      # temp CSV and a throwaway SQLite DB, proving migrations run, CSV import +
+      # idempotent re-import work, and exit codes are correct on Linux paths.
+      - name: SQLite migration + CSV import smoke (real CLIs)
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          db="$work/ci-history.sqlite"
+          csvdir="$work/history"
+          mkdir -p "$csvdir"
+          node -e "const fs=require('fs');const lines=['ticker,date,open,high,low,close,volume'];const d=new Date(Date.UTC(2025,0,1));for(let i=0;i<40;i++){const s=d.toISOString().slice(0,10);const c=100+(i%7);lines.push('SMOKE,'+s+','+c+','+(c+2)+','+(c-2)+','+c+','+(1000+i));d.setUTCDate(d.getUTCDate()+1);}fs.writeFileSync(process.argv[1],lines.join('\n'));" "$csvdir/SMOKE.csv"
+          export STOCK_DB_PATH="$db"
+          echo "::group::data:import (single file)"
+          npm run data:import -- --file "$csvdir/SMOKE.csv"
+          echo "::endgroup::"
+          echo "::group::data:backfill (directory, idempotent re-run)"
+          npm run data:backfill -- --csv-directory "$csvdir"
+          echo "::endgroup::"
+          test -f "$db" || { echo "expected SQLite DB was not created"; exit 1; }
+          echo "SQLite migration + CSV import smoke passed."
+
+  # ---------------------------------------------------------------------------
+  # Windows: cross-platform confidence for the risk areas — node:sqlite path
+  # handling, PowerShell argument quoting, and CLI plumbing. Deliberately lighter
+  # than Linux (the full matrix runs on Linux); still strictly offline.
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows (smoke + path handling)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies (root + backend + frontend)
+        run: |
+          npm ci
+          npm --prefix backend ci
+          npm --prefix frontend ci
+
+      - name: Typecheck (frontend + backend)
+        run: npm run typecheck
+
+      # SQLite path handling differs most on Windows; run the backend suite there.
+      - name: Backend unit + integration tests
+        run: npm run test:backend
+
+      - name: Offline CI smoke (migrations + CSV backfill + idempotency)
+        run: npm run ci:smoke
+
+      # Validates the syntax of every PowerShell ops script WITHOUT executing it,
+      # using the PowerShell language parser. A no-op (passes) if none exist yet.
+      - name: PowerShell script syntax check
+        run: |
+          $scripts = Get-ChildItem -Path scripts -Filter *.ps1 -Recurse -ErrorAction SilentlyContinue
+          if (-not $scripts) { Write-Host "No .ps1 scripts to check."; exit 0 }
+          $failed = $false
+          foreach ($s in $scripts) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($s.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors -and $errors.Count -gt 0) {
+              Write-Host "Syntax errors in $($s.Name):"
+              $errors | ForEach-Object { Write-Host "  $($_.Message)" }
+              $failed = $true
+            } else {
+              Write-Host "OK: $($s.Name)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      # Exercises the real CLIs from PowerShell with a temp path that contains a
+      # space, so Windows path handling and argument quoting are both covered.
+      - name: SQLite migration + CSV import smoke (real CLIs, PowerShell)
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "ci smoke"   # space => quoting test
+          $csvdir = Join-Path $work "history"
+          New-Item -ItemType Directory -Force -Path $csvdir | Out-Null
+          $csv = Join-Path $csvdir "SMOKE.csv"
+          $lines = New-Object System.Collections.Generic.List[string]
+          $lines.Add("ticker,date,open,high,low,close,volume")
+          $d = [datetime]::new(2025,1,1)
+          for ($i = 0; $i -lt 40; $i++) {
+            $s = $d.ToString("yyyy-MM-dd")
+            $c = 100 + ($i % 7)
+            $lines.Add("SMOKE,$s,$c,$($c+2),$($c-2),$c,$(1000+$i)")
+            $d = $d.AddDays(1)
+          }
+          Set-Content -Path $csv -Value $lines -Encoding utf8
+          $env:STOCK_DB_PATH = Join-Path $work "ci-history.sqlite"
+          npm run data:import -- --file "$csv"
+          if ($LASTEXITCODE -ne 0) { throw "data:import failed ($LASTEXITCODE)" }
+          npm run data:backfill -- --csv-directory "$csvdir"
+          if ($LASTEXITCODE -ne 0) { throw "data:backfill failed ($LASTEXITCODE)" }
+          if (-not (Test-Path $env:STOCK_DB_PATH)) { throw "expected SQLite DB was not created" }
+          Write-Host "Windows SQLite + CSV import smoke passed."

@@ -100,6 +100,22 @@ const envSchema = z
   // Seconds before a held daily-job lock is considered stale and recoverable
   // (so an abnormally-terminated run never leaves a permanent lock). 60–86400.
   STOCK_DAILY_LOCK_TIMEOUT_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
+  // Directory for SQLite backup snapshots (data:backup / data:restore). Relative
+  // paths resolve from the process CWD; point it at a persistent, OFF-host volume
+  // in production. Git-ignored (under .cache by default). A real DB/backup is
+  // never committed.
+  STOCK_BACKUP_DIR: z.string().min(1).default(".cache/stock-data/backups"),
+  // Optional directory of pre-built SPA static assets (frontend `dist/`) to serve
+  // from THIS process. Empty (default) = JSON-only API (the SPA is hosted
+  // separately; strictest CSP). When set (the single-container image sets it to
+  // the bundled frontend build), the server also serves the SPA and falls back to
+  // `index.html` for non-`/api` routes — see `app.ts`. Never contains secrets.
+  STOCK_STATIC_DIR: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().min(1).optional()
+  ),
+  // How many generational backup snapshots to retain (newest wins). 1–365.
+  STOCK_BACKUP_KEEP: z.coerce.number().int().min(1).max(365).default(7),
   // Comma-separated list of additional allowed CORS origins.
   ALLOWED_ORIGINS: z
     .string()

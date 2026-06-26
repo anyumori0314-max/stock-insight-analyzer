@@ -30,7 +30,9 @@ describe("ComparisonTable — display only (never fetches)", () => {
     );
 
     // AAPL value present (plain number: fixture currency is null), MSFT untaken.
-    expect(screen.getByText("104.00")).toBeInTheDocument();
+    // "104.00" can appear for both the price and the 100-based index column, so
+    // assert presence (>=1) rather than uniqueness here.
+    expect(screen.getAllByText("104.00").length).toBeGreaterThan(0);
     expect(screen.queryByText("$104.00")).not.toBeInTheDocument();
     expect(screen.getByText("未取得")).toBeInTheDocument();
   });
@@ -47,8 +49,35 @@ describe("ComparisonTable — display only (never fetches)", () => {
       ["AAPL", "MSFT"]
     );
 
-    expect(screen.getByText("104.00")).toBeInTheDocument(); // null -> plain
+    expect(screen.getAllByText("104.00").length).toBeGreaterThan(0); // null -> plain
     expect(screen.getByText("$104.00")).toBeInTheDocument(); // USD -> styled
+  });
+
+  it("renders the 100-based index column (期間開始を100とした相対指数)", () => {
+    // periodReturnPercent +12 -> index 112.00; distinct from the price so the
+    // index cell is unambiguous.
+    const report = makeReport({ ticker: "AAPL" });
+    renderTable(
+      {
+        AAPL: {
+          status: "success",
+          report: { ...report, metrics: { ...report.metrics, periodReturnPercent: 12 } },
+        },
+      },
+      ["AAPL"]
+    );
+    expect(screen.getByText("指数(100基準)")).toBeInTheDocument();
+    expect(screen.getByText("112.00")).toBeInTheDocument();
+  });
+
+  it("exposes the table as a keyboard-reachable, labelled scroll region", () => {
+    renderTable(
+      { AAPL: { status: "success", report: makeReport({ ticker: "AAPL" }) } },
+      ["AAPL"]
+    );
+    const region = screen.getByRole("region", { name: /銘柄比較表（横スクロール可能）/ });
+    expect(region).toHaveClass("table-wrap");
+    expect(region).toHaveAttribute("tabindex", "0"); // scrollable area is focusable
   });
 
   it("shows a terse error per row, never the full provider message", () => {

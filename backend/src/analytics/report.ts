@@ -3,13 +3,17 @@ import type { StockTimeSeries } from "../types/stock";
 import { analyze } from "./analysis";
 import {
   annualizedVolatilityPct,
+  bollingerBands,
   dailyChange,
   dailyChangePercent,
+  macd,
   maxDrawdownPct,
+  movingAverageDeviationPct,
   periodReturnPct,
   rsi,
   sma,
   smaSeries,
+  volumeChangePct,
 } from "./indicators";
 
 /**
@@ -53,6 +57,9 @@ export function buildStockReport(series: StockTimeSeries): StockReport {
   // A normalized series always has >= 1 bar (else the client throws
   // INSUFFICIENT_DATA), so the latest close is a real finite number.
   const currentPrice = closes[closes.length - 1];
+  const volumes = series.bars.map((bar) => bar.volume);
+  const macdResult = macd(closes);
+  const bands = bollingerBands(closes);
 
   const metrics: StockMetrics = {
     currentPrice,
@@ -64,6 +71,16 @@ export function buildStockReport(series: StockTimeSeries): StockReport {
     rsi14: rsi(closes),
     annualizedVolatilityPercent: annualizedVolatilityPct(closes),
     maxDrawdownPercent: maxDrawdownPct(closes),
+    // Phase 20 extended indicators.
+    macd: macdResult.macd,
+    macdSignal: macdResult.signal,
+    macdHistogram: macdResult.histogram,
+    bollingerUpper: bands.upper,
+    bollingerMiddle: bands.middle,
+    bollingerLower: bands.lower,
+    volumeChangePercent: volumeChangePct(volumes),
+    sma20DeviationPercent: movingAverageDeviationPct(closes, SMA_SHORT),
+    sma50DeviationPercent: movingAverageDeviationPct(closes, SMA_LONG),
   };
 
   const warnings = [...series.warnings];

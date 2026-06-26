@@ -142,12 +142,29 @@ export function openDatabase(options: OpenDatabaseOptions): SqlDatabase {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  const db = new DatabaseSync(location, { readOnly: options.readOnly ?? false });
-  // WAL keeps readers and a single writer from blocking each other; foreign_keys
-  // enforces referential integrity; busy_timeout bounds lock contention so a
-  // concurrent CLI run fails fast (and predictably) rather than hanging.
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA busy_timeout = 5000;");
+  const readOnly = options.readOnly ?? false;
+  const db = new DatabaseSync(location, { readOnly });
+  try {
+    // `journal_mode = WAL` WRITES to the database header, so it must be skipped on
+    // a read-only connection (it would throw "attempt to write a readonly
+    // database"). foreign_keys / busy_timeout are per-connection settings (no file
+    // write) and are safe either way. WAL keeps readers and a single writer from
+    // blocking each other; busy_timeout bounds lock contention so a concurrent CLI
+    // run fails fast (and predictably) rather than hanging.
+    if (!readOnly) {
+      db.exec("PRAGMA journal_mode = WAL;");
+    }
+    db.exec("PRAGMA foreign_keys = ON;");
+    db.exec("PRAGMA busy_timeout = 5000;");
+  } catch (err) {
+    // Never leak the handle if a pragma fails (e.g. a corrupt/invalid file): an
+    // open handle would lock the file on Windows.
+    try {
+      db.close();
+    } catch {
+      // already closing down; nothing further to do.
+    }
+    throw err;
+  }
   return wrap(db);
 }

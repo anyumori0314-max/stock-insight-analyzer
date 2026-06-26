@@ -197,3 +197,154 @@ export function maxDrawdownPct(closes: number[]): number | null {
   }
   return finiteOrNull(maxDrawdown * 100);
 }
+
+// --- Phase 20: extended indicators ------------------------------------------
+
+/** Default MACD periods (fast EMA, slow EMA, signal EMA). */
+export const MACD_FAST = 12;
+export const MACD_SLOW = 26;
+export const MACD_SIGNAL = 9;
+
+/** Default Bollinger Band period and standard-deviation multiplier. */
+export const BOLLINGER_PERIOD = 20;
+export const BOLLINGER_MULTIPLIER = 2;
+
+/**
+ * Exponential moving average aligned to `values`: element `i` is the EMA of the
+ * window ending at `i`, or `null` until `period` points exist. The series is
+ * seeded with the simple average of the first `period` values (the standard
+ * warm-up), then smoothed with the usual `k = 2 / (period + 1)` weight.
+ */
+export function emaSeries(values: number[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (period <= 0 || values.length < period) {
+    return out;
+  }
+  const k = 2 / (period + 1);
+  let prev = 0;
+  for (let i = 0; i < period; i += 1) {
+    prev += values[i];
+  }
+  prev /= period;
+  out[period - 1] = finiteOrNull(prev);
+  for (let i = period; i < values.length; i += 1) {
+    prev = values[i] * k + prev * (1 - k);
+    out[i] = finiteOrNull(prev);
+  }
+  return out;
+}
+
+/** Latest EMA of `values`, or `null` if there are fewer than `period` points. */
+export function ema(values: number[], period: number): number | null {
+  const series = emaSeries(values, period);
+  return finiteOrNull(series[series.length - 1]);
+}
+
+export interface MacdResult {
+  /** MACD line: fast EMA − slow EMA. */
+  macd: number | null;
+  /** Signal line: EMA of the MACD line. */
+  signal: number | null;
+  /** Histogram: MACD − signal. */
+  histogram: number | null;
+}
+
+/**
+ * MACD (Moving Average Convergence/Divergence). Returns the LATEST values of the
+ * MACD line, its signal line, and the histogram. Each is `null` until enough data
+ * exists (the MACD line needs ~`slow` points; the signal needs ~`slow + signal`),
+ * so a short window honestly reports the signal/histogram as unavailable rather
+ * than guessing.
+ */
+export function macd(
+  closes: number[],
+  fast: number = MACD_FAST,
+  slow: number = MACD_SLOW,
+  signalPeriod: number = MACD_SIGNAL
+): MacdResult {
+  if (closes.length < slow) {
+    return { macd: null, signal: null, histogram: null };
+  }
+  const fastEma = emaSeries(closes, fast);
+  const slowEma = emaSeries(closes, slow);
+  const macdLine: number[] = [];
+  for (let i = 0; i < closes.length; i += 1) {
+    const f = fastEma[i];
+    const s = slowEma[i];
+    if (f !== null && s !== null) {
+      macdLine.push(f - s);
+    }
+  }
+  const macdLatest = macdLine.length > 0 ? macdLine[macdLine.length - 1] : null;
+  let signal: number | null = null;
+  if (macdLine.length >= signalPeriod) {
+    signal = ema(macdLine, signalPeriod);
+  }
+  const histogram =
+    macdLatest !== null && signal !== null ? macdLatest - signal : null;
+  return {
+    macd: finiteOrNull(macdLatest),
+    signal: finiteOrNull(signal),
+    histogram: finiteOrNull(histogram),
+  };
+}
+
+export interface BollingerBands {
+  middle: number | null;
+  upper: number | null;
+  lower: number | null;
+}
+
+/**
+ * Bollinger Bands over the most recent `period` closes: the middle band is the
+ * SMA, the upper/lower bands are ±`multiplier` POPULATION standard deviations.
+ * Returns all-null until `period` points are available.
+ */
+export function bollingerBands(
+  closes: number[],
+  period: number = BOLLINGER_PERIOD,
+  multiplier: number = BOLLINGER_MULTIPLIER
+): BollingerBands {
+  if (period <= 0 || closes.length < period) {
+    return { middle: null, upper: null, lower: null };
+  }
+  const window = closes.slice(closes.length - period);
+  const mean = window.reduce((acc, v) => acc + v, 0) / period;
+  const variance = window.reduce((acc, v) => acc + (v - mean) ** 2, 0) / period;
+  const sd = Math.sqrt(variance);
+  return {
+    middle: finiteOrNull(mean),
+    upper: finiteOrNull(mean + multiplier * sd),
+    lower: finiteOrNull(mean - multiplier * sd),
+  };
+}
+
+/**
+ * Day-over-day change in trading volume (percent). `null` if there are fewer than
+ * two bars or the prior volume is zero.
+ */
+export function volumeChangePct(volumes: number[]): number | null {
+  if (volumes.length < 2) {
+    return null;
+  }
+  const current = volumes[volumes.length - 1];
+  const previous = volumes[volumes.length - 2];
+  if (previous === 0) {
+    return null;
+  }
+  return finiteOrNull(((current - previous) / previous) * 100);
+}
+
+/**
+ * Deviation of the latest close from its `period`-day SMA, in percent
+ * (positive = above the average). `null` until the SMA is computable or if the
+ * SMA is zero.
+ */
+export function movingAverageDeviationPct(closes: number[], period: number): number | null {
+  const avg = sma(closes, period);
+  if (avg === null || avg === 0 || closes.length === 0) {
+    return null;
+  }
+  const last = closes[closes.length - 1];
+  return finiteOrNull(((last - avg) / avg) * 100);
+}

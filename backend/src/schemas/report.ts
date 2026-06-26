@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { isRealIsoDate, isRealIsoDateTimeUtc, isRealProviderTimestamp } from "../utils/dates";
+import { STOCK_RANGES } from "../types/stock";
 
 /**
  * zod schema for the public `StockReport` contract. Used both in tests and — at
@@ -57,6 +58,17 @@ export const stockMetricsSchema = z
     rsi14: finiteOrNull,
     annualizedVolatilityPercent: finiteOrNull,
     maxDrawdownPercent: finiteOrNull,
+    // Phase 20 extended indicators. Optional so the Phase 2–11 contract and
+    // existing fixtures stay valid; when present each is finite-or-null.
+    macd: finiteOrNull.optional(),
+    macdSignal: finiteOrNull.optional(),
+    macdHistogram: finiteOrNull.optional(),
+    bollingerUpper: finiteOrNull.optional(),
+    bollingerMiddle: finiteOrNull.optional(),
+    bollingerLower: finiteOrNull.optional(),
+    volumeChangePercent: finiteOrNull.optional(),
+    sma20DeviationPercent: finiteOrNull.optional(),
+    sma50DeviationPercent: finiteOrNull.optional(),
   })
   .strict();
 
@@ -67,6 +79,9 @@ export const stockAnalysisSchema = z
     risk: riskVerdictSchema,
     score: z.number().int().min(0).max(100).nullable(),
     comments: z.array(z.string()),
+    // Phase 20 explainability. Optional so existing fixtures stay valid.
+    scoreRationale: z.array(z.string()).optional(),
+    dataLimitations: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -104,8 +119,9 @@ export const stockReportSchema = z
     // Required (no default): a missing source must FAIL validation, never be
     // silently assumed. The service always stamps one of the four modes.
     source: z.enum(["live", "mock", "historical", "hybrid"]),
-    // One of the supported analysis windows (compact feed backs only 1m / 3m).
-    range: z.enum(["1m", "3m"]),
+    // One of the supported analysis windows (1m/3m everywhere; 6m/1y from the
+    // SQLite history store). Sourced from STOCK_RANGES so it can never drift.
+    range: z.enum(STOCK_RANGES),
     currency: z.string().nullable(),
     timezone: z.string().nullable(),
     lastRefreshed: realProviderTimestamp.nullable(),

@@ -238,6 +238,109 @@ button {
 }
 
 /* ============================================================================
+ * Watchlist manager (Phase 17)
+ * ========================================================================== */
+.panel__note {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-3);
+}
+
+.watchlist {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+}
+
+.watchlist__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  padding: var(--space-1) var(--space-2);
+}
+
+.watchlist__item--active {
+  border-color: var(--color-primary);
+  background: rgba(79, 140, 255, 0.16);
+}
+
+.watchlist__select {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  flex: 1;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.watchlist__symbol {
+  font-weight: 650;
+  font-family: var(--font-mono);
+}
+
+.watchlist__origin {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+
+.watchlist__controls {
+  display: flex;
+  gap: 2px;
+}
+
+.icon-btn {
+  min-width: 28px;
+  min-height: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.icon-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.icon-btn--danger:hover:not(:disabled) {
+  border-color: var(--color-down);
+  color: var(--color-down);
+}
+
+.watchlist__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.watchlist__confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
  * Main / cards
  * ========================================================================== */
 .main {
@@ -253,6 +356,10 @@ button {
   border-radius: var(--radius-lg);
   padding: var(--space-5);
   box-shadow: var(--shadow);
+  /* As a flex item of `.main`, allow shrinking below content width so a wide
+     child (the nowrap comparison table) scrolls INSIDE `.table-wrap` instead of
+     stretching the card — and the document — past the viewport. */
+  min-width: 0;
 }
 
 .card__header {
@@ -261,6 +368,7 @@ button {
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+  min-width: 0;
 }
 
 .card__title {
@@ -423,9 +531,19 @@ button {
   color: var(--color-text);
 }
 
-/* Comparison table */
+/* Comparison table. The wrapper is the ONLY place the wide nowrap table may
+   scroll: `max-width: 100%` + `min-width: 0` keep it bounded to its parent so the
+   horizontal scroll stays inside this region and never reaches the document. */
 .table-wrap {
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
+}
+
+/* Keyboard users can reach the scroll area; screen readers hear it is scrollable. */
+.table-wrap:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .comparison-table {
@@ -556,6 +674,16 @@ button {
 
 .chart-figure {
   margin: 0;
+  min-width: 0;
+}
+
+/* Recharts renders an absolutely-positioned tooltip wrapper inside the chart that
+   can sit just past the right edge (and, on a narrow viewport, widen the whole
+   document). Clip it to the chart box: an active tooltip stays within the chart
+   viewBox (allowEscapeViewBox x:false), so only the stray off-screen wrapper is
+   trimmed — the page never gains a horizontal scrollbar from the chart. */
+.chart-canvas {
+  overflow: hidden;
 }
 
 .chart-summary {
@@ -583,6 +711,76 @@ button {
 .row-remove:hover {
   color: var(--color-down);
   border-color: var(--color-down);
+}
+
+/* Accessible chart legend (Phase 20) — outside the aria-hidden SVG subtree. */
+.chart-legend {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.chart-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chart-legend__swatch {
+  display: inline-block;
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+/* Score rationale (collapsible) + data-limitation note (Phase 20). */
+.rationale {
+  margin-top: var(--space-3);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.rationale > summary {
+  cursor: pointer;
+  color: var(--color-primary);
+}
+
+.rationale-list {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-text);
+}
+
+.data-limitations {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px dashed var(--color-warn);
+  border-radius: var(--radius-md);
+  background: rgba(245, 177, 76, 0.08);
+  font-size: 0.82rem;
+}
+
+.data-limitations__title {
+  margin: 0 0 var(--space-2);
+  font-weight: 600;
+  color: var(--color-warn);
+}
+
+.data-limitations__list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-text);
 }
 
 /* Visually hidden but available to assistive technology. */

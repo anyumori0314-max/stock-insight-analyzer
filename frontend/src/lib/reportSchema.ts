@@ -53,6 +53,17 @@ export const stockMetricsSchema = z
     rsi14: finiteOrNull,
     annualizedVolatilityPercent: finiteOrNull,
     maxDrawdownPercent: finiteOrNull,
+    // Phase 20 extended indicators. Optional (mirrors the backend) so the
+    // Phase 2–11 contract and existing fixtures stay valid.
+    macd: finiteOrNull.optional(),
+    macdSignal: finiteOrNull.optional(),
+    macdHistogram: finiteOrNull.optional(),
+    bollingerUpper: finiteOrNull.optional(),
+    bollingerMiddle: finiteOrNull.optional(),
+    bollingerLower: finiteOrNull.optional(),
+    volumeChangePercent: finiteOrNull.optional(),
+    sma20DeviationPercent: finiteOrNull.optional(),
+    sma50DeviationPercent: finiteOrNull.optional(),
   })
   .strict();
 
@@ -63,6 +74,9 @@ export const stockAnalysisSchema = z
     risk: riskVerdictSchema,
     score: z.number().int().min(0).max(100).nullable(),
     comments: z.array(z.string()),
+    // Phase 20 explainability. Optional (mirrors the backend).
+    scoreRationale: z.array(z.string()).optional(),
+    dataLimitations: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -99,9 +113,9 @@ export const stockReportSchema = z
     // Required (no default): a missing source is a contract violation. Mirrors the
     // backend's four data-serving modes.
     source: z.enum(["live", "mock", "historical", "hybrid"]),
-    // One of the supported analysis windows (mirrors the backend enum:
-    // compact feed backs only 1m / 3m).
-    range: z.enum(["1m", "3m"]),
+    // One of the supported analysis windows (mirrors the backend STOCK_RANGES:
+    // 1m/3m everywhere, 6m/1y from the SQLite history store).
+    range: z.enum(["1m", "3m", "6m", "1y"]),
     currency: z.string().nullable(),
     timezone: z.string().nullable(),
     lastRefreshed: realProviderTimestamp.nullable(),

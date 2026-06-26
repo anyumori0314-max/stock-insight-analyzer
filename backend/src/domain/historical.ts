@@ -106,6 +106,37 @@ export interface DataFreshness {
 }
 
 /**
+ * Per-ticker history coverage (Phase 16). Describes how much stored data exists
+ * for one symbol and which analysis windows it can fully back, plus the latest
+ * CSV-import and API-sync timestamps. SAFE for surfacing in an operations report
+ * or a status endpoint — no paths, stacks or key state.
+ */
+export interface TickerCoverage {
+  ticker: string;
+  earliestTradeDate: string | null;
+  latestTradeDate: string | null;
+  /** Number of stored bars for the ticker (raw row count, weekends included). */
+  recordCount: number;
+  /**
+   * Windows whose required trading-day count is fully met by the stored
+   * TRADING-day count (weekends, holidays, duplicate, invalid and future dates
+   * excluded — NOT the raw `recordCount`), e.g. `1y` needs ~252 sessions. Ordered
+   * shortest -> longest.
+   */
+  availableRanges: import("../types/stock").StockRange[];
+  /**
+   * Estimated number of regular trading sessions BETWEEN the earliest and latest
+   * stored bar that are NOT present (expected sessions minus stored count, clamped
+   * to >= 0). Zero when there is no gap (or fewer than two bars).
+   */
+  missingTradingDays: number;
+  /** ISO instant of the most recent COMPLETED CSV import (any ticker), or null. */
+  lastCsvImportedAt: string | null;
+  /** ISO instant of the most recent successful API sync for THIS ticker, or null. */
+  lastApiSyncedAt: string | null;
+}
+
+/**
  * Safe, public-facing metadata describing where a served report's data came
  * from and how fresh it is. Serialized onto `StockReport.dataStatus`. It contains
  * NO internal paths, stacks, provider bodies or API-key state.

@@ -36,11 +36,19 @@ describe("RangeSwitch — accessible window selector", () => {
     expect(onChange).toHaveBeenCalledWith("3m");
   });
 
-  it("offers only the supported windows (no 6か月 / 1年)", () => {
+  it("offers the long 6か月 / 1年 windows (Phase 16)", () => {
     render(<RangeSwitch value="3m" onChange={vi.fn()} />);
     const group = screen.getByRole("group", { name: "表示期間" });
-    expect(within(group).queryByRole("button", { name: "6か月" })).not.toBeInTheDocument();
-    expect(within(group).queryByRole("button", { name: "1年" })).not.toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "6か月" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "1年" })).toBeInTheDocument();
+  });
+
+  it("emits the long-window API value on selection", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<RangeSwitch value="3m" onChange={onChange} />);
+    await user.click(screen.getByRole("button", { name: "1年" }));
+    expect(onChange).toHaveBeenCalledWith("1y");
   });
 
   it("is operable by keyboard", async () => {

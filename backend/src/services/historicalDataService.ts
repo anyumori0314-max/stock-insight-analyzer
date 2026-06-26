@@ -1,5 +1,11 @@
 import type { PriceRepository } from "../repositories/priceRepository";
-import { DEFAULT_RANGE, type DailyBar, type StockRange, type StockTimeSeries } from "../types/stock";
+import {
+  DEFAULT_RANGE,
+  MAX_RANGE_TRADING_DAYS,
+  type DailyBar,
+  type StockRange,
+  type StockTimeSeries,
+} from "../types/stock";
 
 /**
  * Reads the SQLite history store and produces a provider-agnostic
@@ -19,11 +25,16 @@ export interface HistoricalDataService {
 
 export interface HistoricalDataServiceOptions {
   priceRepository: PriceRepository;
-  /** Max recent bars to read (bounds memory). Defaults to 250 (~1 trading year). */
+  /**
+   * Max recent bars to read (bounds memory). Defaults to the largest supported
+   * window (`1y` ~252 sessions) plus a lookback margin, so a `1y` request is
+   * fully covered while a single read still bounds memory even for years of data.
+   */
   fetchLimit?: number;
 }
 
-const DEFAULT_FETCH_LIMIT = 250;
+/** Cover the largest window (`1y`) with headroom for indicator lookback. */
+const DEFAULT_FETCH_LIMIT = MAX_RANGE_TRADING_DAYS + 50;
 
 export function createHistoricalDataService(
   options: HistoricalDataServiceOptions

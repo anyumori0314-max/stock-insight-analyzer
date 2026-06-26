@@ -1,0 +1,32 @@
+# Keep the build context small and SECRET-FREE.
+
+# Dependencies / build output (reinstalled / recompiled inside the image).
+**/node_modules
+**/dist
+**/build
+**/coverage
+*.tsbuildinfo
+
+# Secrets and local state must NEVER enter the image.
+**/.env
+**/.env.*
+!**/.env.example
+.cache/
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*
+**/*-journal
+**/*.log
+
+# VCS / CI / tooling / docs not needed at runtime.
+.git
+.github
+.claude
+scripts
+docs
+*.md
+
+# NOTE: the `frontend` source IS part of the build context now — the image builds
+# the SPA and serves it alongside the API. Its node_modules / dist are still
+# excluded above (**/node_modules, **/dist), and secrets/DB/cache never enter.

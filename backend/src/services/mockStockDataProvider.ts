@@ -21,7 +21,7 @@ export { isUsMarketHoliday };
  */
 
 /** Number of trading days generated (within the requested 60–100 range). */
-const MOCK_TRADING_DAYS = 80;
+export const MOCK_TRADING_DAYS = 80;
 
 /**
  * Fixed anchor date the generated series ends on. Hard-coded so the mock output

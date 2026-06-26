@@ -3,12 +3,13 @@ import type { StockReport } from "../types/stock";
 /**
  * Supported analysis windows — must match `backend/src/types/stock.ts`.
  *
- * The free `TIME_SERIES_DAILY` compact feed returns only ~100 trading days, so
- * only `1m` (~21d) and `3m` (~63d) can be honestly backed — and they return
- * genuinely different periods. `6m` / `1y` are intentionally NOT offered (the
- * compact feed cannot reach that far back; presenting the same ~100 bars as a
- * year would be misleading). The backend rejects them with `INVALID_RANGE`, and
- * this list — the single source the UI renders from — never offers them.
+ * `1m` (~21d) and `3m` (~63d) are backed by every data mode, including the free
+ * `TIME_SERIES_DAILY` compact feed. `6m` (~126d) and `1y` (~252d) are honestly
+ * backed by the SQLite history store (the historical / hybrid modes and the CSV
+ * backfill pipeline); in `live` mode the backend serves what the compact feed has
+ * and attaches an explicit "available N business days" warning rather than
+ * silently showing a shorter period. This list is the single source the UI
+ * renders from.
  */
 export type StockRange = StockReport["range"];
 
@@ -21,6 +22,8 @@ export interface RangeOption {
 export const RANGE_OPTIONS: RangeOption[] = [
   { value: "1m", label: "1か月" },
   { value: "3m", label: "3か月" },
+  { value: "6m", label: "6か月" },
+  { value: "1y", label: "1年" },
 ];
 
 /** Default window: fully covered by the feed and long enough for SMA50. */

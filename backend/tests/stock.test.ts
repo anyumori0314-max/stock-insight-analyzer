@@ -92,11 +92,23 @@ describe("GET /api/stock/:ticker", () => {
     expect(getReport).not.toHaveBeenCalled();
   });
 
-  it("rejects the now-unsupported 6m / 1y windows with 400 INVALID_RANGE (never fetched)", async () => {
+  it("accepts the long 6m / 1y windows and forwards them to the service (Phase 16)", async () => {
     const getReport = vi.fn(async (ticker: string, range?: StockRange) => makeReport(ticker, range));
     const app = buildTestApp({ stockService: { getReport } });
 
-    for (const range of ["6m", "1y"]) {
+    for (const range of ["6m", "1y"] as const) {
+      const res = await request(app).get(`/api/stock/AAPL?range=${range}`);
+      expect(res.status).toBe(200);
+      expect(res.body.range).toBe(range);
+      expect(getReport).toHaveBeenCalledWith("AAPL", range);
+    }
+  });
+
+  it("still rejects windows we cannot serve (e.g. 2y / max) with 400 INVALID_RANGE (never fetched)", async () => {
+    const getReport = vi.fn(async (ticker: string, range?: StockRange) => makeReport(ticker, range));
+    const app = buildTestApp({ stockService: { getReport } });
+
+    for (const range of ["2y", "5y", "max"]) {
       const res = await request(app).get(`/api/stock/AAPL?range=${range}`);
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe("INVALID_RANGE");

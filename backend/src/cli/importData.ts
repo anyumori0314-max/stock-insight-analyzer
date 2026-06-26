@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { loadEnv } from "../config/env";
 import { openHistoricalStore } from "../db/store";
 import { createCsvImportService, type CsvImportResult } from "../services/csvImportService";
+import { runCli } from "../utils/cli";
 import { createLogger } from "../utils/logger";
 
 /**
@@ -115,4 +116,4 @@ function main(): number {
   return worstExitCode(results);
 }
 
-process.exit(main());
+runCli(main);

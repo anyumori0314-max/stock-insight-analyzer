@@ -65,15 +65,15 @@ describe("stockReportSchema — source is required & enumerated", () => {
 
 describe("stockReportSchema — range enum", () => {
   it("accepts every supported window and rejects unsupported ones", () => {
-    for (const range of ["1m", "3m"]) {
+    // 1m/3m everywhere; 6m/1y now backed by the SQLite history store (Phase 16).
+    for (const range of ["1m", "3m", "6m", "1y"]) {
       expect(stockReportSchema.safeParse({ ...validReport(), range }).success).toBe(true);
     }
-    // 6m / 1y are intentionally NOT supported (compact feed cannot back them).
-    expect(rejects({ ...validReport(), range: "6m" })).toBe(true);
-    expect(rejects({ ...validReport(), range: "1y" })).toBe(true);
     expect(rejects({ ...validReport(), range: "100d" })).toBe(true);
     expect(rejects({ ...validReport(), range: "30d" })).toBe(true);
     expect(rejects({ ...validReport(), range: "2y" })).toBe(true);
+    expect(rejects({ ...validReport(), range: "5y" })).toBe(true);
+    expect(rejects({ ...validReport(), range: "max" })).toBe(true);
   });
 });
 

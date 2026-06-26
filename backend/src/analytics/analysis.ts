@@ -153,6 +153,72 @@ function riskComment(
   }
 }
 
+/**
+ * Per-factor rationale explaining HOW the composite score was reached (base 50
+ * plus each verdict's contribution). Empty when the score is null. Descriptive,
+ * never advisory — it mirrors the weights used in {@link computeScore}.
+ */
+export function computeScoreRationale(
+  trend: TrendVerdict,
+  momentum: MomentumVerdict,
+  risk: RiskVerdict,
+  score: number | null
+): string[] {
+  if (score === null) {
+    return [];
+  }
+  const trendPart =
+    trend === "uptrend"
+      ? "上昇トレンド（+25）"
+      : trend === "downtrend"
+        ? "下落トレンド（−25）"
+        : "横ばい（±0）";
+  const momentumPart =
+    momentum === "neutral"
+      ? "中立モメンタム（+15）"
+      : momentum === "overbought"
+        ? "過熱（−15）"
+        : "売られ過ぎ（−10）";
+  const riskPart =
+    risk === "low" ? "低リスク（+10）" : risk === "high" ? "高リスク（−10）" : "標準リスク（±0）";
+  return [
+    "基準値 50 を起点に算出しています。",
+    `トレンド: ${trendPart}`,
+    `モメンタム: ${momentumPart}`,
+    `リスク: ${riskPart}`,
+    `合計（0〜100にクランプ）: ${score}`,
+  ];
+}
+
+/**
+ * Human-readable reasons specific indicators could not be computed. A field is
+ * only reported when it is EXPLICITLY null (present but uncomputable) — an
+ * `undefined` (field not supplied by a caller) is treated as "not requested" so
+ * direct unit callers are not given spurious limitations.
+ */
+export function computeDataLimitations(metrics: StockMetrics): string[] {
+  const reasons: string[] = [];
+  const isNull = (v: number | null | undefined): boolean => v === null;
+  if (isNull(metrics.rsi14)) {
+    reasons.push("RSI(14): 約15営業日分の履歴が必要です。");
+  }
+  if (isNull(metrics.sma50)) {
+    reasons.push("50日移動平均: 50営業日分の履歴が必要です。");
+  }
+  if (isNull(metrics.macd)) {
+    reasons.push("MACD: 約26営業日分の履歴が必要です。");
+  } else if (isNull(metrics.macdSignal)) {
+    reasons.push("MACDシグナル: シグナル線の算出に約35営業日分の履歴が必要です。");
+  }
+  if (isNull(metrics.bollingerMiddle)) {
+    reasons.push("ボリンジャーバンド: 20営業日分の履歴が必要です。");
+  }
+  if (isNull(metrics.annualizedVolatilityPercent)) {
+    reasons.push("年率ボラティリティ: 3営業日以上の履歴が必要です。");
+  }
+  return reasons;
+}
+
 /** Runs the full rule-based analysis over a metrics snapshot. */
 export function analyze(metrics: StockMetrics): StockAnalysis {
   const trend = analyzeTrend(metrics);
@@ -166,5 +232,13 @@ export function analyze(metrics: StockMetrics): StockAnalysis {
     riskComment(risk, metrics.annualizedVolatilityPercent, metrics.maxDrawdownPercent),
   ];
 
-  return { trend, momentum, risk, score, comments };
+  return {
+    trend,
+    momentum,
+    risk,
+    score,
+    comments,
+    scoreRationale: computeScoreRationale(trend, momentum, risk, score),
+    dataLimitations: computeDataLimitations(metrics),
+  };
 }

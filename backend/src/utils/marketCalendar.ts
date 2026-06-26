@@ -104,6 +104,86 @@ export function isTradingDay(date: Date): boolean {
 }
 
 /**
+ * Number of regular US trading days in the inclusive ISO date range
+ * `[startIso, endIso]` (weekends and major holidays excluded). Returns 0 when the
+ * range is empty/reversed or either bound is not a real calendar date. Bounded by
+ * a hard cap on the number of days walked, so a pathological range can never spin.
+ *
+ * Used by the coverage service to estimate how many trading sessions SHOULD exist
+ * between a ticker's earliest and latest stored bar, and thus how many are missing.
+ */
+export function countTradingDaysInclusive(startIso: string, endIso: string): number {
+  const startMs = Date.parse(`${startIso}T00:00:00Z`);
+  const endMs = Date.parse(`${endIso}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+    return 0;
+  }
+  // Guard against an absurd span (e.g. a corrupt date) walking forever: ~80 years.
+  const MAX_DAYS = 366 * 80;
+  let count = 0;
+  const cursor = new Date(startMs);
+  for (let i = 0; i <= MAX_DAYS; i += 1) {
+    if (cursor.getTime() > endMs) {
+      break;
+    }
+    if (isTradingDay(cursor)) {
+      count += 1;
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return count;
+}
+
+/** Parses a STRICT ISO `YYYY-MM-DD`, returning the UTC Date or null when the
+ *  string is malformed or denotes an impossible day (e.g. `2026-02-30`, which a
+ *  lenient parser would roll over). */
+function parseIsoUtcStrict(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) {
+    return null;
+  }
+  return date;
+}
+
+/**
+ * THE single business-day judgment shared by coverage and the report shortfall
+ * warning, so "how many trading days do we actually have?" is computed ONE way
+ * everywhere (never as a raw row/bar count). Given a collection of ISO dates it
+ * returns how many DISTINCT, real, non-future US trading days they cover:
+ *  - duplicate date strings are counted once;
+ *  - malformed / impossible dates (`2026-02-30`, `not-a-date`) are ignored;
+ *  - dates after `now` (UTC) are ignored (a future bar is not "available" history);
+ *  - weekends and major US market holidays do not count.
+ *
+ * This is why a 252-row CSV padded with weekends/holidays is NOT treated as a
+ * full year: only the ~trading sessions inside it count toward 6m (~126) / 1y (~252).
+ */
+export function countTradingDays(
+  dates: Iterable<string>,
+  options: { now?: Date } = {}
+): number {
+  const now = options.now ?? new Date();
+  const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const seen = new Set<string>();
+  let count = 0;
+  for (const iso of dates) {
+    if (seen.has(iso)) continue; // de-duplicate by raw string
+    seen.add(iso);
+    const date = parseIsoUtcStrict(iso);
+    if (!date) continue; // invalid / impossible date
+    if (date.getTime() > todayMs) continue; // future date
+    if (!isTradingDay(date)) continue; // weekend / holiday
+    count += 1;
+  }
+  return count;
+}
+
+/**
  * The most recent COMPLETED US trading day as an ISO `YYYY-MM-DD`, computed
  * CONSERVATIVELY: it starts from YESTERDAY (UTC) and walks back to a trading day.
  * The one-day margin means we never expect today's bar before the session has

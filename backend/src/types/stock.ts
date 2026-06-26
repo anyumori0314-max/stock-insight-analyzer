@@ -9,38 +9,49 @@
 /**
  * Supported analysis windows.
  *
- * The free `TIME_SERIES_DAILY` feed is requested with `outputsize=compact`, which
- * returns only the latest ~100 trading days. We therefore expose ONLY the windows
- * that the compact feed can FULLY and HONESTLY back: `1m` (~21d) and `3m` (~63d).
+ * Short windows `1m` (~21d) and `3m` (~63d) are fully backed by EVERY data mode,
+ * including the free `TIME_SERIES_DAILY` compact feed (latest ~100 trading days).
  *
- * `6m` (~126d) and `1y` (~252d) are intentionally NOT supported: the compact feed
- * cannot reach that far back, and presenting the same ~100 bars as "6 months" or
- * "1 year" would be misleading. They are removed from this union, so the zod enum
- * rejects them at runtime (`INVALID_RANGE`) and the UI never offers them. (Real
- * 6m/1y support would require `outputsize=full`; that is a deliberate future
- * change, documented in the README, not silently faked here.)
+ * Long windows `6m` (~126d) and `1y` (~252d) are honestly backed only by the
+ * SQLite history store (the `historical` / `hybrid` modes) and the CSV backfill
+ * pipeline (Phase 16). The live compact feed cannot reach that far back, so when a
+ * long window is requested in `live` mode the service slices what is available and
+ * raises an EXPLICIT, non-fatal warning naming the wanted vs. available bar count
+ * (see `sliceSeriesToRange`) — it never silently presents ~100 bars as a year.
+ *
+ * Windows are managed as this single literal union (mirrored by the zod
+ * `rangeQuerySchema` enum and the public report schema), so any other value is
+ * rejected at runtime as `INVALID_RANGE` and the UI only ever offers these four.
  */
-export const STOCK_RANGES = ["1m", "3m"] as const;
+export const STOCK_RANGES = ["1m", "3m", "6m", "1y"] as const;
 export type StockRange = (typeof STOCK_RANGES)[number];
 
 /** Default window: fully covered by the compact feed and long enough for SMA50. */
 export const DEFAULT_RANGE: StockRange = "3m";
 
 /**
- * Approximate US trading days per window (~21 sessions/month). The service slices
- * the compact series to the last N bars for the requested window, so `1m` and
- * `3m` always return genuinely different periods from the same compact fetch.
+ * Approximate US trading days per window (~21 sessions/month, ~252/year). The
+ * service slices the available series to the last N bars for the requested window,
+ * so every window returns a genuinely different period; the long windows draw on
+ * the deeper SQLite history rather than the ~100-bar compact feed.
  */
 export const RANGE_TRADING_DAYS: Record<StockRange, number> = {
   "1m": 21,
   "3m": 63,
+  "6m": 126,
+  "1y": 252,
 };
 
 /** Human-readable (Japanese) window labels, for warnings and the UI. */
 export const RANGE_LABEL: Record<StockRange, string> = {
   "1m": "1か月",
   "3m": "3か月",
+  "6m": "6か月",
+  "1y": "1年",
 };
+
+/** The largest supported window, in trading days (drives history fetch bounds). */
+export const MAX_RANGE_TRADING_DAYS = Math.max(...Object.values(RANGE_TRADING_DAYS));
 
 /** Runtime guard for an arbitrary value being a supported range. */
 export function isStockRange(value: unknown): value is StockRange {

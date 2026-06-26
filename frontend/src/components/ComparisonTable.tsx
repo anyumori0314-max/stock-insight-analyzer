@@ -32,14 +32,24 @@ export const ComparisonTable = memo(function ComparisonTable({
   onRemove,
 }: ComparisonTableProps) {
   return (
-    <div className="table-wrap">
+    <div
+      className="table-wrap"
+      role="region"
+      aria-label="銘柄比較表（横スクロール可能）"
+      tabIndex={0}
+    >
       <table className="comparison-table">
-        <caption className="sr-only">選択した銘柄の主要指標の比較表</caption>
+        <caption className="sr-only">
+          選択した銘柄の主要指標の比較表。「指数(100基準)」は期間開始を100とした相対パフォーマンスです。
+        </caption>
         <thead>
           <tr>
             <th scope="col">銘柄</th>
             <th scope="col">現在値</th>
             <th scope="col">期間騰落率</th>
+            <th scope="col">
+              <abbr title="期間開始を100とした相対指数">指数(100基準)</abbr>
+            </th>
             <th scope="col">RSI(14)</th>
             <th scope="col">年率ボラ</th>
             <th scope="col">最大下落率</th>
@@ -73,7 +83,7 @@ export const ComparisonTable = memo(function ComparisonTable({
                       {ticker}
                     </button>
                   </td>
-                  <td colSpan={7} className="muted">
+                  <td colSpan={8} className="muted">
                     未取得
                   </td>
                   <td>{removeButton}</td>
@@ -85,7 +95,7 @@ export const ComparisonTable = memo(function ComparisonTable({
               return (
                 <tr key={ticker} className={isActive ? "is-active" : undefined}>
                   <td>{ticker}</td>
-                  <td colSpan={7} className="muted">
+                  <td colSpan={8} className="muted">
                     読み込み中…
                   </td>
                   <td>{removeButton}</td>
@@ -103,7 +113,7 @@ export const ComparisonTable = memo(function ComparisonTable({
                       {ticker}
                     </button>
                   </td>
-                  <td colSpan={7} className="state--error">
+                  <td colSpan={8} className="state--error">
                     取得できませんでした
                   </td>
                   <td>{removeButton}</td>
@@ -122,6 +132,12 @@ export const ComparisonTable = memo(function ComparisonTable({
                 <td>{formatPrice(metrics.currentPrice, state.report.currency)}</td>
                 <td className={`value-${changeDirection(metrics.periodReturnPercent)}`}>
                   {formatPercent(metrics.periodReturnPercent)}
+                </td>
+                <td>
+                  {formatNumber(
+                    metrics.periodReturnPercent === null ? null : 100 + metrics.periodReturnPercent,
+                    2
+                  )}
                 </td>
                 <td>{formatNumber(metrics.rsi14, 1)}</td>
                 <td>{formatPercent(metrics.annualizedVolatilityPercent)}</td>

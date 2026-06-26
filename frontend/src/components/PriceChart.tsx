@@ -1,7 +1,6 @@
 import { memo, useMemo } from "react";
 import {
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -38,6 +37,13 @@ const TREND_TEXT: Record<TrendVerdict, string> = {
   sideways: "横ばい",
   unknown: "判定不可",
 };
+
+/** The chart's series — single source of truth for the lines and the legend. */
+const CHART_SERIES = [
+  { key: "close", name: "終値", color: "#4f8cff", width: 2 },
+  { key: "sma20", name: "SMA20", color: "#2fbf71", width: 1.5 },
+  { key: "sma50", name: "SMA50", color: "#f5b14c", width: 1.5 },
+] as const;
 
 function formatDateTick(value: string): string {
   return value.length >= 10 ? value.slice(5).replace("-", "/") : value;
@@ -80,6 +86,22 @@ export const PriceChart = memo(function PriceChart(props: PriceChartProps) {
   return (
     <figure className="chart-figure">
       <figcaption className="chart-summary">{summary}</figcaption>
+      {/* Accessible legend OUTSIDE the aria-hidden chart subtree, so the series
+          mapping is conveyed to screen-reader and keyboard users (the Recharts
+          legend lives inside the hidden SVG and is not announced). The color
+          swatches are decorative; the text label carries the meaning. */}
+      <ul className="chart-legend">
+        {CHART_SERIES.map((s) => (
+          <li key={s.key} className="chart-legend__item">
+            <span
+              className="chart-legend__swatch"
+              style={{ backgroundColor: s.color }}
+              aria-hidden="true"
+            />
+            {s.name}
+          </li>
+        ))}
+      </ul>
       {/* The SVG is decorative for assistive tech; the caption above conveys the
           data. `accessibilityLayer={false}` keeps Recharts from emitting a
           tabIndex=0 / role="application" surface, so this aria-hidden subtree
@@ -114,10 +136,17 @@ export const PriceChart = memo(function PriceChart(props: PriceChartProps) {
                 typeof value === "number" ? formatPrice(value, currency) : String(value)
               }
             />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Line type="monotone" dataKey="close" name="終値" stroke="#4f8cff" strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="sma20" name="SMA20" stroke="#2fbf71" strokeWidth={1.5} dot={false} />
-            <Line type="monotone" dataKey="sma50" name="SMA50" stroke="#f5b14c" strokeWidth={1.5} dot={false} />
+            {CHART_SERIES.map((s) => (
+              <Line
+                key={s.key}
+                type="monotone"
+                dataKey={s.key}
+                name={s.name}
+                stroke={s.color}
+                strokeWidth={s.width}
+                dot={false}
+              />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>

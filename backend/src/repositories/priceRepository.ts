@@ -24,8 +24,18 @@ export interface UpsertCounts {
 export interface PriceRepository {
   /** The newest stored `trade_date` for a ticker, or null when none exists. */
   getLatestTradeDate(ticker: string): string | null;
+  /** The oldest stored `trade_date` for a ticker, or null when none exists. */
+  getEarliestTradeDate(ticker: string): string | null;
   /** Number of stored bars for a ticker. */
   countBars(ticker: string): number;
+  /**
+   * Distinct stored `trade_date`s for a ticker, ascending. Lightweight (dates
+   * only) so coverage can judge true trading-day availability without loading
+   * full bars.
+   */
+  getTradeDates(ticker: string): string[];
+  /** Distinct tickers that have at least one stored bar, ascending. */
+  listTickers(): string[];
   /**
    * Stored bars for a ticker, ascending by date. With `limit`, returns the most
    * recent `limit` bars (still ascending) so charting/indicators iterate forward.
@@ -85,8 +95,17 @@ export function createPriceRepository(db: SqlDatabase): PriceRepository {
   const latest: SqlStatement = db.prepare(
     "SELECT MAX(trade_date) AS latest FROM price_bars WHERE ticker = ?"
   );
+  const earliest: SqlStatement = db.prepare(
+    "SELECT MIN(trade_date) AS earliest FROM price_bars WHERE ticker = ?"
+  );
   const count: SqlStatement = db.prepare(
     "SELECT COUNT(*) AS n FROM price_bars WHERE ticker = ?"
+  );
+  const tradeDates: SqlStatement = db.prepare(
+    "SELECT trade_date FROM price_bars WHERE ticker = ? ORDER BY trade_date ASC"
+  );
+  const distinctTickers: SqlStatement = db.prepare(
+    "SELECT DISTINCT ticker FROM price_bars ORDER BY ticker ASC"
   );
   const allAsc: SqlStatement = db.prepare(
     "SELECT ticker, trade_date, open, high, low, close, adjusted_close, volume, currency, source " +
@@ -144,9 +163,20 @@ export function createPriceRepository(db: SqlDatabase): PriceRepository {
       const value = row?.latest;
       return value === null || value === undefined ? null : String(value);
     },
+    getEarliestTradeDate(ticker) {
+      const row = earliest.get(ticker);
+      const value = row?.earliest;
+      return value === null || value === undefined ? null : String(value);
+    },
     countBars(ticker) {
       const row = count.get(ticker);
       return row ? Number(row.n) : 0;
+    },
+    getTradeDates(ticker) {
+      return tradeDates.all(ticker).map((row) => String(row.trade_date));
+    },
+    listTickers() {
+      return distinctTickers.all().map((row) => String(row.ticker));
     },
     getBars(ticker, limit) {
       const rows =

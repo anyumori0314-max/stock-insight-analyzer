@@ -67,6 +67,28 @@ export function AnalysisPanel({ analysis }: AnalysisPanelProps) {
           <li key={index}>{comment}</li>
         ))}
       </ul>
+
+      {analysis.scoreRationale && analysis.scoreRationale.length > 0 && (
+        <details className="rationale">
+          <summary>スコアの根拠を表示</summary>
+          <ul className="rationale-list">
+            {analysis.scoreRationale.map((reason, index) => (
+              <li key={index}>{reason}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {analysis.dataLimitations && analysis.dataLimitations.length > 0 && (
+        <div className="data-limitations" role="note">
+          <p className="data-limitations__title">データ不足により算出できない指標</p>
+          <ul className="data-limitations__list">
+            {analysis.dataLimitations.map((reason, index) => (
+              <li key={index}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

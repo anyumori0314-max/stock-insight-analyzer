@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import { FANG_PLUS_PRESET_NOTE, FANG_PLUS_PRESETS, validateTicker } from "../lib/tickers";
 
@@ -6,9 +6,11 @@ interface SidebarProps {
   selected: string[];
   onAdd: (ticker: string) => void;
   onRemove: (ticker: string) => void;
+  /** Extra panels rendered at the bottom of the sidebar column (e.g. watchlist). */
+  children?: ReactNode;
 }
 
-export function Sidebar({ selected, onAdd, onRemove }: SidebarProps) {
+export function Sidebar({ selected, onAdd, onRemove, children }: SidebarProps) {
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
 
@@ -106,6 +108,8 @@ export function Sidebar({ selected, onAdd, onRemove }: SidebarProps) {
           )}
         </form>
       </section>
+
+      {children}
     </aside>
   );
 }

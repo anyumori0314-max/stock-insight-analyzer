@@ -43,6 +43,26 @@ export interface StockMetrics {
   annualizedVolatilityPercent: number | null;
   /** Largest peak-to-trough decline, as a non-positive percent. */
   maxDrawdownPercent: number | null;
+  // --- Phase 20: extended indicators. OPTIONAL so the Phase 2–11 contract and
+  // existing fixtures stay valid; the report builder always populates them. ----
+  /** MACD line (fast EMA − slow EMA). */
+  macd?: number | null;
+  /** MACD signal line (EMA of the MACD line). */
+  macdSignal?: number | null;
+  /** MACD histogram (MACD − signal). */
+  macdHistogram?: number | null;
+  /** Bollinger upper band (SMA20 + 2σ). */
+  bollingerUpper?: number | null;
+  /** Bollinger middle band (SMA20). */
+  bollingerMiddle?: number | null;
+  /** Bollinger lower band (SMA20 − 2σ). */
+  bollingerLower?: number | null;
+  /** Day-over-day trading volume change, in percent. */
+  volumeChangePercent?: number | null;
+  /** Deviation of the latest close from SMA20, in percent. */
+  sma20DeviationPercent?: number | null;
+  /** Deviation of the latest close from SMA50, in percent. */
+  sma50DeviationPercent?: number | null;
 }
 
 export interface StockAnalysis {
@@ -56,6 +76,19 @@ export interface StockAnalysis {
   score: number | null;
   /** Descriptive, non-advisory commentary (Japanese). */
   comments: string[];
+  // --- Phase 20: explainability. OPTIONAL so existing fixtures stay valid. -----
+  /**
+   * Per-factor rationale for the composite score: which signals pushed it up or
+   * down. Empty when the score is null (too little data). Descriptive, never
+   * advisory.
+   */
+  scoreRationale?: string[];
+  /**
+   * Reasons specific indicators / the score could not be computed (e.g. the
+   * window is too short for SMA50 or the MACD signal line). Lets the UI explain
+   * a "—" instead of silently hiding it.
+   */
+  dataLimitations?: string[];
 }
 
 export interface CacheMetadata {
